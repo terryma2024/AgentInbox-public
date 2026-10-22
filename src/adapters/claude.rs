@@ -30,7 +30,7 @@ pub fn product_request(
         format!(
             "工具：{}\n工作目录：{}\n参数：{}",
             event["tool_name"].as_str().ok_or("missing tool")?,
-            event["cwd"].as_str().unwrap_or("见原任务"),
+            event["cwd"].as_str().unwrap_or("未知"),
             serde_json::to_string_pretty(&event["tool_input"]).map_err(|e| e.to_string())?
         )
     } else {
@@ -62,9 +62,15 @@ pub fn product_request(
     } else {
         questions[0]["options"].clone()
     };
-    Ok(
-        json!({"requestId":uuid::Uuid::new_v4().to_string(),"revision":1,"expiresAt":now+ttl,"state":"pending","kind":if approval{"permission"}else if questions.len()==1{"choice"}else{"questions"},"hostId":host,"engine":"claude","launchSurface":"unknown","projectPath":event["cwd"],"sessionLabel":null,"runtimeId":runtime,"sessionId":session,"turnId":event.get("prompt_id"),"nativeRequestId":toolid,"itemId":toolid,"operationSummary":if approval{json!(approval_body)}else{Value::Null},"title":if approval{"Claude 需要审批"}else{"Claude 等待回答"},"body":if approval{json!(approval_body)}else{questions[0]["prompt"].clone()},"options":opts,"questions":questions,"multiSelect":event["tool_input"]["questions"][0]["multiSelect"]==true,"allowText":!approval,"createdAt":now,"updatedAt":now,"native":{"event":event}}),
-    )
+    let original =
+        json!({"tool_name":event["tool_name"],"cwd":event["cwd"],"tool_input":event["tool_input"]});
+    let original = serde_json::to_string_pretty(&original).map_err(|e| e.to_string())?;
+    if super::codex::sensitive(&original) {
+        return Err("potential secret in decision context; keep in native UI".into());
+    }
+    let mut request = json!({"requestId":uuid::Uuid::new_v4().to_string(),"revision":1,"expiresAt":now+ttl,"state":"pending","kind":if approval{"permission"}else if questions.len()==1{"choice"}else{"questions"},"hostId":host,"engine":"claude","launchSurface":"unknown","projectPath":event["cwd"],"sessionLabel":null,"runtimeId":runtime,"sessionId":session,"turnId":event.get("prompt_id"),"nativeRequestId":toolid,"itemId":toolid,"operationSummary":if approval{json!(approval_body)}else{Value::Null},"title":if approval{"Claude 需要审批"}else{"Claude 等待回答"},"body":if approval{json!(approval_body)}else{questions[0]["prompt"].clone()},"options":opts,"questions":questions,"multiSelect":event["tool_input"]["questions"][0]["multiSelect"]==true,"allowText":!approval,"createdAt":now,"updatedAt":now,"native":{"event":event}});
+    request["decisionContext"] = json!({"taskGoal":null,"blockingReason":null,"impactScope":null,"originalContent":original});
+    Ok(request)
 }
 pub fn output(event: &Value, request: &Value, reply: &Value) -> Result<Value, String> {
     if event != &request["native"]["event"]

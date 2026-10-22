@@ -1,6 +1,43 @@
 import XCTest
 
 final class InboxUITests: XCTestCase {
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication, upward: Bool = true) {
+        for _ in 0..<10 where !element.isHittable { if upward { app.swipeUp() } else { app.swipeDown() } }
+        XCTAssertTrue(element.isHittable)
+    }
+    func testDecisionContextAndLongOriginalTail() {
+        let app = XCUIApplication(); app.launchArguments = ["--demo", "--demo-context"]; app.launch()
+        let machine = app.staticTexts["decision-context.machine"]
+        XCTAssertTrue(machine.waitForExistence(timeout: 5)); XCTAssertEqual(machine.label, "fixture-host")
+        XCTAssertEqual(app.staticTexts["decision-context.project"].label, "/srv/example-project")
+        XCTAssertEqual(app.staticTexts["decision-context.goal"].label, "核对示例项目检查结果")
+        reveal(app.staticTexts["decision-context.scope"], in: app)
+        XCTAssertEqual(app.staticTexts["decision-context.reason"].label, "等待批准示例命令")
+        XCTAssertEqual(app.staticTexts["decision-context.scope"].label, "未知")
+        let details = XCTAttachment(screenshot: app.screenshot()); details.name = "decision-context"; details.lifetime = .keepAlways; add(details)
+        let original = app.buttons["decision-original"]
+        for _ in 0..<5 where !original.isHittable { app.swipeDown() }
+        XCTAssertTrue(original.exists); original.tap()
+        XCTAssertTrue(app.navigationBars["完整原文"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["完整原始参数"].exists)
+        XCTAssertTrue(app.staticTexts["原始命令"].exists)
+        let tail = app.staticTexts["decision-original.command.80"]
+        for _ in 0..<18 where !tail.isHittable { app.swipeUp() }
+        XCTAssertTrue(tail.isHittable)
+        XCTAssertEqual(tail.label, "末尾关键参数 --target example.invalid")
+        let end = XCTAttachment(screenshot: app.screenshot()); end.name = "decision-original-tail"; end.lifetime = .keepAlways; add(end)
+    }
+
+    func testMissingDecisionContextIsExplicitlyUnknown() {
+        let app = XCUIApplication(); app.launchArguments = ["--demo", "--demo-detail"]; app.launch()
+        let project = app.staticTexts["decision-context.project"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        for key in ["project", "goal", "reason", "scope"] {
+            let field = app.staticTexts["decision-context.\(key)"]
+            for _ in 0..<4 where !field.exists { app.swipeUp() }
+            XCTAssertEqual(field.label, "未知")
+        }
+    }
     func testTailscaleAssociationValidationAndCancel() {
         let app = XCUIApplication(); app.launchArguments = ["--demo"]; app.launch()
         app.tabBars.buttons["机器"].tap()
@@ -23,10 +60,11 @@ final class InboxUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["决策收件箱"].waitForExistence(timeout: 10))
         let inboxShot = XCTAttachment(screenshot: app.screenshot()); inboxShot.name = "ios-inbox"; inboxShot.lifetime = .keepAlways; add(inboxShot)
         app.buttons["request.demo-choice"].tap()
-        XCTAssertTrue(app.buttons["option.test"].waitForExistence(timeout: 5))
+        reveal(app.buttons["option.test"], in: app)
         let detailShot = XCTAttachment(screenshot: app.screenshot()); detailShot.name = "ios-detail"; detailShot.lifetime = .keepAlways; add(detailShot)
         app.buttons["option.test"].tap()
-        app.buttons["submit-decision"].tap()
+        reveal(app.buttons["submit-decision"], in: app); app.buttons["submit-decision"].tap()
+        reveal(app.staticTexts["提交中"], in: app, upward: false)
         XCTAssertTrue(app.staticTexts["提交中"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["原任务已采用"].exists)
     }
@@ -34,26 +72,29 @@ final class InboxUITests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["--demo", "--demo-more"]; app.launch()
         app.buttons["request.demo-text"].tap()
         let field = app.textFields["reply-text"]
-        XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText("请先检查差异")
-        app.buttons["submit-decision"].tap()
+        reveal(field, in: app); field.tap(); field.typeText("请先检查差异")
+        reveal(app.buttons["submit-decision"], in: app); app.buttons["submit-decision"].tap()
+        reveal(app.staticTexts["提交中"], in: app, upward: false)
         XCTAssertTrue(app.staticTexts["提交中"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["原任务已采用"].exists)
         app.navigationBars.buttons.element(boundBy: 0).tap()
         app.buttons["request.demo-multi"].tap()
-        app.buttons["option.unit"].tap(); app.buttons["option.lint"].tap()
-        app.buttons["submit-decision"].tap()
+        reveal(app.buttons["option.unit"], in: app); app.buttons["option.unit"].tap(); app.buttons["option.lint"].tap()
+        reveal(app.buttons["submit-decision"], in: app); app.buttons["submit-decision"].tap()
+        reveal(app.staticTexts["提交中"], in: app, upward: false)
         XCTAssertTrue(app.staticTexts["提交中"].waitForExistence(timeout: 5))
     }
     func testNativeSingleQuestionChoiceThenChineseTextIsExclusive() {
         let app = XCUIApplication(); app.launchArguments = ["--demo", "--demo-more"]; app.launch()
         app.buttons["request.demo-native-choice"].tap()
         let option = app.buttons["option.native-test"]
-        XCTAssertTrue(option.waitForExistence(timeout: 5)); option.tap()
+        reveal(option, in: app); option.tap()
         XCTAssertEqual(option.value as? String, "已选择")
         let field = app.textFields["reply-text.native-question"]
         field.tap(); field.typeText("请先检查差异")
         XCTAssertEqual(option.value as? String, "未选择")
-        app.buttons["submit-decision"].tap()
+        reveal(app.buttons["submit-decision"], in: app); app.buttons["submit-decision"].tap()
+        reveal(app.staticTexts["提交中"], in: app, upward: false)
         XCTAssertTrue(app.staticTexts["提交中"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["原任务已采用"].exists)
     }
@@ -117,10 +158,12 @@ final class InboxUITests: XCTestCase {
         app.buttons["request.demo-choice"].tap()
         let received = app.descendants(matching: .any)["reply-step.received"]
         let continued = app.descendants(matching: .any)["reply-step.continued"]
-        XCTAssertTrue(received.waitForExistence(timeout: 5))
+        reveal(received, in: app)
         XCTAssertEqual(received.value as? String, "未确认")
         XCTAssertEqual(continued.value as? String, "未确认")
-        app.buttons["option.test"].tap(); app.buttons["submit-decision"].tap()
+        reveal(app.buttons["option.test"], in: app); app.buttons["option.test"].tap()
+        reveal(app.buttons["submit-decision"], in: app); app.buttons["submit-decision"].tap()
+        reveal(app.staticTexts["提交中"], in: app, upward: false)
         XCTAssertTrue(app.staticTexts["提交中"].waitForExistence(timeout: 5))
         XCTAssertEqual(received.value as? String, "未确认")
         XCTAssertEqual(continued.value as? String, "未确认")

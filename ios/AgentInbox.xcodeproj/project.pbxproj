@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		030EE0FBB405F4C0EB8A0621 /* LocalRelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65AD82C49240C6CA540E9F95 /* LocalRelayTests.swift */; };
 		055CDDAA67FC8E82C255DD54 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156C7132824A4F7F365FCED0 /* Models.swift */; };
+		01761210EF7545BC9F6D0BD7 /* DecisionMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D5D0628BFD48D6B390FA62 /* DecisionMessages.swift */; };
 		088CE60788CCBF98449CCF0A /* PhysicalAutomationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68C46AD91DFBEECBDF308027 /* PhysicalAutomationTests.swift */; };
 		0DD9676FEA3EAAD4638661DC /* AgentInboxApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E65B2B600D9753A003026D2 /* AgentInboxApp.swift */; };
 		19D9F63E00F3C514EBF72D7E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5CB419B3017BED47065FE9CE /* Assets.xcassets */; };
@@ -27,6 +28,7 @@
 		4CC223A69449B2EF00FE469C /* TailnetLinkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE93676B76541327A0F2C588 /* TailnetLinkView.swift */; };
 		507C91DA47DA395CED85D9F3 /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5494B545AC3D28E959DECE0E /* Storage.swift */; };
 		53FFDCD905F47C4F63D1C951 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156C7132824A4F7F365FCED0 /* Models.swift */; };
+		79F9A456E9154F70A206B8EB /* DecisionMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8D5D0628BFD48D6B390FA62 /* DecisionMessages.swift */; };
 		58F82DB19CC9BA49CE012FAB /* TailnetImportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FADF0CF486EBD1FDE171581 /* TailnetImportView.swift */; };
 		5EF5C1076C24B0764659D1BD /* TailscaleVPNGuidanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FA089C9B09216C904551B89 /* TailscaleVPNGuidanceTests.swift */; };
 		6131B70259B9A361FFDC6643 /* TailnetDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EFF656FF599F5E46E1EB42C /* TailnetDiscovery.swift */; };
@@ -100,6 +102,7 @@
 		1110DCAFAFC1BBD00A366779 /* ProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>"; };
 		14E6E7D82C7F43E9981DDFEA /* InboxUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxUITests.swift; sourceTree = "<group>"; };
 		156C7132824A4F7F365FCED0 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		E8D5D0628BFD48D6B390FA62 /* DecisionMessages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecisionMessages.swift; sourceTree = "<group>"; };
 		1874602DDCF8E5AF2EC70764 /* AgentInboxTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AgentInboxTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1AC896C361A55C3480A7FFDE /* TailscaleVPNGuidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailscaleVPNGuidance.swift; sourceTree = "<group>"; };
 		21919AA842E2C771CBFC9294 /* ReplySubmission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplySubmission.swift; sourceTree = "<group>"; };
@@ -238,6 +241,7 @@
 				EA02BD0D26268EE0F179AE64 /* API.swift */,
 				A640D23BE257DF89829F281E /* InboxNetwork.swift */,
 				156C7132824A4F7F365FCED0 /* Models.swift */,
+				E8D5D0628BFD48D6B390FA62 /* DecisionMessages.swift */,
 				21919AA842E2C771CBFC9294 /* ReplySubmission.swift */,
 				5494B545AC3D28E959DECE0E /* Storage.swift */,
 				E4CF9E01321A076DE3DA0F0F /* WidgetPushRegistration.swift */,
@@ -398,6 +402,7 @@
 				861C0CE0480E8C9A66E7C0B1 /* InboxNetwork.swift in Sources */,
 				3F1F63BDF10583CB65ECA253 /* InboxWidget.swift in Sources */,
 				055CDDAA67FC8E82C255DD54 /* Models.swift in Sources */,
+				01761210EF7545BC9F6D0BD7 /* DecisionMessages.swift in Sources */,
 				B15A9B36939F3F044350EA96 /* ReplySubmission.swift in Sources */,
 				FE71ED351D0387666DF4C86C /* Storage.swift in Sources */,
 				2752B084BCE58DB274812DD2 /* WidgetPushRegistration.swift in Sources */,
@@ -413,6 +418,7 @@
 				243E072933121ADE397BC774 /* ImportTailnetDevicesIntent.swift in Sources */,
 				23C7C0176F99563290D63D11 /* InboxNetwork.swift in Sources */,
 				53FFDCD905F47C4F63D1C951 /* Models.swift in Sources */,
+				79F9A456E9154F70A206B8EB /* DecisionMessages.swift in Sources */,
 				AFE30D07C27CEBA4336C56B8 /* PairingService.swift in Sources */,
 				AF9979156BDFD712F1BA5873 /* RelaySelectionService.swift in Sources */,
 				93ECF018D79171AD0DCF30F0 /* ReplySubmission.swift in Sources */,

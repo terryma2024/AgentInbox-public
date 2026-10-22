@@ -14,6 +14,8 @@ Request JSON（Swift Codable 同名）：
 
 完整原生参数存于仅 host 可见的 native JSON；device 视图移除 native。问题内容、选项和可审阅审批摘要保留在设备可见字段；无法完整展示的审批留在原生界面。原生未提供的 turn／prompt 等身份可为 null，不制造字段；缺少足以精确绑定的必要身份时拒绝接管。展示 pane／launchSurface 不参与授权，unknown 来源不能用于猜测路由。
 
+请求可带 `projectPath`、`sessionLabel` 及 `decisionContext:{taskGoal,blockingReason,impactScope,originalContent}`。上下文字段为可选字符串或 null；缺失／空白在手机显示“未知”。originalContent 保存面向决策的完整原始参数 JSON 字符串，含全部问题、选项说明或命令与工具参数，独立于摘要；不整体开放 host 专用 native。新请求的 decisionContext、projectPath、sessionLabel 一起纳入 bindingDigest；没有 decisionContext 对象的历史请求保留旧算法。详见 [数据来源及验证边界](DECISION-CONTEXT.md)。
+
 多题采用 `kind="questions"` 和 `questions:[{id,header,prompt,options:[{id,label}],multiSelect,allowText}]`。原生单题也可保留 questions 作题面，但答案编码仍由 kind 决定：
 
 ```json

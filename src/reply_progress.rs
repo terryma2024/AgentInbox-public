@@ -31,6 +31,13 @@ pub fn binding_digest(q: &Value) -> String {
     ]) {
         fields.insert(key.into(), q[key].clone());
     }
+    // Preserve legacy digests for in-flight answers from before context support.
+    // New requests bind everything the user relies on to identify the task.
+    if q["decisionContext"].is_object() {
+        for key in ["decisionContext", "projectPath", "sessionLabel"] {
+            fields.insert(key.into(), q[key].clone());
+        }
+    }
     // serde_json without preserve_order uses recursively sorted map keys.
     format!(
         "{:x}",
