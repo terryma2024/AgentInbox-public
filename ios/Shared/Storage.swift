@@ -163,7 +163,7 @@ enum ResponseJournal {
 #if DEBUG
 // Bounded development metadata only. Never records question bodies, answers or credentials.
 enum InteractionDiagnostics {
-    enum Event: String { case widgetRefreshBegin, widgetRefreshEnd, widgetAnswerBegin, widgetAnswerEnd, appViewStarted, appOpenedURL, appBecameActive, appBecameBackground, widgetPushHandler, widgetPushRegistered, widgetPushRetryLater, widgetProviderBegin, widgetProviderEnd }
+    enum Event: String { case widgetRefreshBegin, widgetRefreshEnd, widgetAnswerBegin, widgetAnswerEnd, appViewStarted, appOpenedURL, appBecameActive, appBecameBackground, appRefreshPollActive, widgetPushHandler, widgetPushRegistered, widgetPushRetryLater, widgetProviderBegin, widgetProviderEnd }
     private static let writerLock = NSLock()
     static func record(_ event: Event, requestID: String? = nil, revision: Int? = nil) {
         writerLock.lock(); defer { writerLock.unlock() }

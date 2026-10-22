@@ -30,6 +30,9 @@ pub struct Config {
     pub ipc_socket: PathBuf,
     #[serde(default)]
     pub codex_socket: Option<PathBuf>,
+    /// Opt-in private journal produced by the patched native arbitration point.
+    #[serde(default)]
+    pub native_receipt_dir: Option<PathBuf>,
     #[serde(default)]
     pub daemon_pid: Option<u32>,
     pub scopes: Vec<PathBuf>,
@@ -93,6 +96,9 @@ fn private_dir(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 pub fn generation(pid: u32) -> Result<String, String> {
+    generation_for(pid, false)
+}
+fn generation_for(pid: u32, standalone_receipt_engine: bool) -> Result<String, String> {
     let out = Command::new("/bin/ps")
         .args(["-p", &pid.to_string(), "-o", "lstart=", "-o", "command="])
         .output()
@@ -101,7 +107,7 @@ pub fn generation(pid: u32) -> Result<String, String> {
     if !out.status.success()
         || text.is_empty()
         || !text.contains("app-server")
-        || !text.contains("--managed-daemon")
+        || (!standalone_receipt_engine && !text.contains("--managed-daemon"))
     {
         return Err("configured PID is not the active managed app-server".into());
     }
@@ -128,6 +134,11 @@ struct Pending {
     sent_at: Option<Instant>,
     expected: Option<String>,
     boundary: Option<crate::reply_evidence::DispatchBoundary>,
+    native_source: Option<crate::native_receipt::Source>,
+    native_dispatch: Option<crate::native_receipt::Dispatch>,
+    recorded_progress: Option<Value>,
+    continuation_unknown: bool,
+    blocked_receipt: Option<(String, Value)>,
 }
 fn receipt(
     c: &Config,
@@ -137,7 +148,19 @@ fn receipt(
     evidence: Value,
 ) -> Result<Value, String> {
     let mut payload = json!({"hostId":c.host_id,"requestId":p.request["requestId"],"responseId":p.response.as_ref().map(|r|r["responseId"].clone()),"state":state,"evidence":evidence});
-    if state == "adopted" {
+    let progress = if matches!(state, "adopted" | "unknown") {
+        progress_envelope(
+            p,
+            attributed_observation(p),
+            state == "unknown" || p.continuation_unknown,
+        )
+    } else {
+        None
+    };
+    if let Some(progress) = progress {
+        payload["state"] = json!("adopted");
+        payload["replyProgress"] = progress;
+    } else if state == "adopted" {
         payload["nativeObservation"] = json!("answerSourceUnconfirmed");
     }
     let path = persist_receipt(&c.state_dir, &payload)?;
@@ -307,7 +330,7 @@ fn claim(c: &Config, p: &Pending) -> Result<(), Box<dyn std::error::Error>> {
     writeln!(
         f,
         "{}",
-        json!({"requestId":id,"responseId":p.response.as_ref().map(|r|&r["responseId"]),"claimedAt":now(),"state":"claimed-before-dispatch; no blind retry","request":p.request,"callback":p.callback,"response":p.response,"boundary":p.boundary})
+        json!({"requestId":id,"responseId":p.response.as_ref().map(|r|&r["responseId"]),"claimedAt":now(),"state":"claimed-before-dispatch; no blind retry","request":p.request,"callback":p.callback,"response":p.response,"boundary":p.boundary,"nativeSource":p.native_source,"nativeDispatch":p.native_dispatch})
     )?;
     f.sync_all()?;
     fs::File::open(&c.state_dir)?.sync_all()?;
@@ -386,6 +409,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let token = fs::read_to_string(&c.token_file)?.trim().to_string();
     flush_receipts(&c, &token);
     let mut startup_reconciled = reconcile_startup(&c, &token)
+        .and_then(|_| reconcile_native_dispatches(&c, &token))
         .and_then(|_| reconcile_progress_startup(&c, &token))
         .is_ok();
     let runtime = format!("host-{}", uuid::Uuid::new_v4());
@@ -420,6 +444,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     });
     let mut ws = None;
     let mut daemon_gen = None;
+    let mut native_source = None;
+    if c.native_receipt_dir.is_some() && c.codex_socket.is_none() {
+        return Err("native receipt source requires its native Unix socket".into());
+    }
     if let Some(socket) = &c.codex_socket {
         let stream = UnixStream::connect(socket)?;
         let actual_peer = peer_pid(&stream)?;
@@ -432,7 +460,13 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         {
             return Err("Codex Unix socket peer PID differs from explicit pin".into());
         }
-        let generation_id = generation(actual_peer).map_err(|e| format!("generation: {e}"))?;
+        native_source = c
+            .native_receipt_dir
+            .as_ref()
+            .map(|dir| crate::native_receipt::Source::connect(dir, actual_peer))
+            .transpose()?;
+        let generation_id = generation_for(actual_peer, native_source.is_some())
+            .map_err(|e| format!("generation: {e}"))?;
         c.daemon_pid = Some(actual_peer);
         stream.set_read_timeout(Some(Duration::from_millis(20)))?;
         stream.set_write_timeout(Some(Duration::from_secs(3)))?;
@@ -477,6 +511,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         if outbox_at.elapsed() > Duration::from_secs(2) {
             if !startup_reconciled {
                 startup_reconciled = reconcile_startup(&c, &token)
+                    .and_then(|_| reconcile_native_dispatches(&c, &token))
                     .and_then(|_| reconcile_progress_startup(&c, &token))
                     .is_ok();
             }
@@ -648,6 +683,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     sent_at: None,
                     expected: None,
                     boundary: None,
+                    native_source: None,
+                    native_dispatch: None,
+                    recorded_progress: None,
+                    continuation_unknown: false,
+                    blocked_receipt: None,
                 },
             );
         }
@@ -843,6 +883,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                                         sent_at: None,
                                         expected: None,
                                         boundary: None,
+                                        native_source: native_source.clone(),
+                                        native_dispatch: None,
+                                        recorded_progress: None,
+                                        continuation_unknown: false,
+                                        blocked_receipt: None,
                                     },
                                 );
                             }
@@ -882,6 +927,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         if m["method"] == "turn/completed"
                             && m["params"]["turn"]["id"] == p.request["turnId"]
                         {
+                            if p.native_source.is_some() && p.response.is_some() {
+                                p.turn_completed = m["params"]["turn"]["status"] == "completed";
+                                p.continuation_unknown = !p.turn_completed;
+                                continue;
+                            }
                             let adopted = p.response.is_some()
                                 && p.resolved
                                 && codex_rollout_matches(p)
@@ -990,13 +1040,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         }
                         p.response = Some(reply.clone());
                         if now() >= p.request["expiresAt"].as_i64().unwrap_or(0) {
-                            let _ = receipt(
-                                &c,
-                                &token,
-                                p,
-                                "expired",
+                            p.blocked_receipt = Some((
+                                "expired".into(),
                                 json!({"reason":"expired before native dispatch"}),
-                            );
+                            ));
                             continue;
                         }
                         let output = if p.request["engine"] == "codex" {
@@ -1004,40 +1051,37 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             claude::output(&p.callback, &p.request, reply)
                         };
-                        let output = match output {
+                        let mut output = match output {
                             Ok(o) => o,
                             Err(_) => {
-                                let _ = receipt(
-                                    &c,
-                                    &token,
-                                    p,
-                                    "invalidated",
+                                p.blocked_receipt = Some((
+                                    "invalidated".into(),
                                     json!({"reason":"native binding or answer validation failed"}),
-                                );
+                                ));
                                 continue;
                             }
                         };
                         p.boundary = transcript_text(p)
                             .map(|text| crate::reply_evidence::DispatchBoundary::capture(&text));
+                        p.native_dispatch = p
+                            .native_source
+                            .as_ref()
+                            .map(|source| source.dispatch(&p.request));
                         if claim(&c, p).is_err() {
-                            let _ = receipt(
-                                &c,
-                                &token,
-                                p,
-                                "unknown",
+                            p.blocked_receipt = Some((
+                                "unknown".into(),
                                 json!({"reason":"dispatch previously claimed; no replay"}),
-                            );
+                            ));
                             continue;
                         }
                         if p.request["engine"] == "codex" {
-                            if generation(c.daemon_pid.unwrap()).ok() != daemon_gen {
-                                let _ = receipt(
-                                    &c,
-                                    &token,
-                                    p,
-                                    "invalidated",
+                            if generation_for(c.daemon_pid.unwrap(), native_source.is_some()).ok()
+                                != daemon_gen
+                            {
+                                p.blocked_receipt = Some((
+                                    "invalidated".into(),
                                     json!({"reason":"daemon generation changed"}),
-                                );
+                                ));
                                 continue;
                             }
                             if let Some(marker) = &c.adoption_marker {
@@ -1055,6 +1099,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                                             .join(",")
                                     ));
                                 }
+                            }
+                            if let Some(dispatch) = &p.native_dispatch {
+                                output["result"]["_agentinboxReceipt"] =
+                                    serde_json::to_value(dispatch)?;
                             }
                             if let Some(w) = ws.as_mut() {
                                 send(w, output)?;
@@ -1089,7 +1137,54 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             poll_at = Instant::now();
         }
         let mut done = Vec::new();
-        for (key, p) in &pending {
+        for (key, p) in &mut pending {
+            if p.blocked_receipt.is_some() {
+                if settle_blocked_dispatch(&c, &token, p) {
+                    done.push(key.clone());
+                }
+                continue;
+            }
+            if p.native_source.is_some() && p.response.is_some() {
+                let observed = attributed_observation(p);
+                let deadline = p
+                    .sent_at
+                    .is_some_and(|t| t.elapsed() > Duration::from_secs(45));
+                if observed.received.is_some() || p.recorded_progress.is_some() {
+                    if let Some(progress) =
+                        progress_envelope(p, observed, deadline || p.continuation_unknown)
+                    {
+                        let finished = progress["continuationObservation"] != "awaiting";
+                        if p.recorded_progress.as_ref() != Some(&progress) {
+                            let payload = json!({"hostId":c.host_id,"requestId":p.request["requestId"],"responseId":p.response.as_ref().unwrap()["responseId"],"state":"adopted","evidence":{"native":"native arbitration and exact original function output"},"replyProgress":progress});
+                            if let Ok(path) = persist_receipt(&c.state_dir, &payload) {
+                                p.recorded_progress = Some(progress);
+                                let _ = deliver_receipt(&c, &token, &path, payload);
+                            }
+                        }
+                        if finished
+                            && p.recorded_progress
+                                .as_ref()
+                                .is_some_and(|v| v["continuationObservation"] != "awaiting")
+                        {
+                            done.push(key.clone());
+                        }
+                    }
+                } else if deadline {
+                    let content_match = codex_rollout_matches(p);
+                    if receipt(
+                        &c,
+                        &token,
+                        p,
+                        if content_match { "adopted" } else { "unknown" },
+                        json!({"reason":"native source receipt missing or unverified; no replay"}),
+                    )
+                    .is_ok()
+                    {
+                        done.push(key.clone());
+                    }
+                }
+                continue;
+            }
             if p.request["engine"] == "codex"
                 && p.response.is_some()
                 && p.turn_completed
@@ -1159,6 +1254,17 @@ fn transcript_text(p: &Pending) -> Option<String> {
         Err(_) => None,
     }
 }
+fn settle_blocked_dispatch(c: &Config, token: &str, p: &Pending) -> bool {
+    let Some((state, evidence)) = &p.blocked_receipt else {
+        return false;
+    };
+    let payload = json!({"hostId":c.host_id,"requestId":p.request["requestId"],"responseId":p.response.as_ref().map(|r|&r["responseId"]),"state":state,"evidence":evidence});
+    let Ok(path) = persist_receipt(&c.state_dir, &payload) else {
+        return false;
+    };
+    let _ = deliver_receipt(c, token, &path, payload);
+    true
+}
 fn native_observation(p: &Pending) -> crate::reply_evidence::Observation {
     let Some(boundary) = &p.boundary else {
         return Default::default();
@@ -1171,11 +1277,124 @@ fn native_observation(p: &Pending) -> crate::reply_evidence::Observation {
     };
     crate::reply_evidence::observe(&p.request, &p.callback, answer, &text, boundary)
 }
+fn attributed_observation(p: &Pending) -> crate::reply_evidence::Observation {
+    let (Some(source), Some(dispatch), Some(answer), Some(boundary), Some(text)) = (
+        &p.native_source,
+        &p.native_dispatch,
+        &p.response,
+        &p.boundary,
+        transcript_text(p),
+    ) else {
+        return Default::default();
+    };
+    source.observe(dispatch, &p.request, &p.callback, answer, &text, boundary)
+}
+fn progress_envelope(
+    p: &Pending,
+    observation: crate::reply_evidence::Observation,
+    unknown: bool,
+) -> Option<Value> {
+    let mut progress = if let Some(received) = observation.received {
+        let mut progress = json!({"schemaVersion":1,"responseId":p.response.as_ref()?["responseId"],"bindingDigest":crate::reply_progress::binding_digest(&p.request),"received":received,"continued":observation.continued});
+        for field in crate::reply_progress::IDENTITY {
+            progress[*field] = p.request[*field].clone();
+        }
+        progress
+    } else {
+        p.recorded_progress.clone()?
+    };
+    progress["continuationObservation"] = json!(if !progress["continued"].is_null() {
+        "confirmed"
+    } else if unknown {
+        "unknown"
+    } else {
+        "awaiting"
+    });
+    Some(progress)
+}
 fn claude_tool_result_matches(p: &Pending) -> bool {
     native_observation(p).received.is_some()
 }
 fn codex_rollout_matches(p: &Pending) -> bool {
     native_observation(p).received.is_some()
+}
+
+/// Restore only durable facts. A previous engine callback is never inherited.
+pub fn reconcile_native_dispatches(c: &Config, token: &str) -> Result<(), String> {
+    let Some(directory) = &c.native_receipt_dir else {
+        return Ok(());
+    };
+    fs::canonicalize(directory).map_err(|_| "native receipt recovery source unavailable")?;
+    for entry in fs::read_dir(&c.state_dir).map_err(|_| "native dispatch ledger unavailable")? {
+        let entry = entry.map_err(|_| "native dispatch ledger entry unreadable")?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(id) = name.strip_prefix("dispatch-") else {
+            continue;
+        };
+        if uuid::Uuid::parse_str(id).is_err() {
+            continue;
+        }
+        let saved = crate::native_receipt::read_private(&c.state_dir, name)?;
+        if saved["nativeSource"].is_null() {
+            continue;
+        }
+        let source: crate::native_receipt::Source =
+            serde_json::from_value(saved["nativeSource"].clone())
+                .map_err(|_| "saved native source invalid")?;
+        if saved["requestId"] != id
+            || saved["request"]["requestId"] != id
+            || saved["request"]["hostId"] != c.host_id
+        {
+            return Err("saved native dispatch context changed".into());
+        }
+        let dispatch = serde_json::from_value(saved["nativeDispatch"].clone())
+            .map_err(|_| "saved native dispatch invalid")?;
+        if saved["boundary"].is_null() {
+            continue;
+        }
+        let boundary = serde_json::from_value(saved["boundary"].clone())
+            .map_err(|_| "saved native boundary invalid")?;
+        let p = Pending {
+            turn_completed: false,
+            published: true,
+            request: saved["request"].clone(),
+            callback: saved["callback"].clone(),
+            hook: None,
+            response: Some(saved["response"].clone()),
+            resolved: false,
+            final_text: None,
+            sent_at: None,
+            expected: None,
+            boundary: Some(boundary),
+            native_source: Some(source),
+            native_dispatch: Some(dispatch),
+            recorded_progress: None,
+            continuation_unknown: true,
+            blocked_receipt: None,
+        };
+        let observation = transcript_text(&p)
+            .map(|text| {
+                p.native_source.as_ref().unwrap().observe_saved(
+                    p.native_dispatch.as_ref().unwrap(),
+                    &p.request,
+                    &p.callback,
+                    p.response.as_ref().unwrap(),
+                    &text,
+                    p.boundary.as_ref().unwrap(),
+                )
+            })
+            .unwrap_or_default();
+        let Some(progress) = progress_envelope(&p, observation, true) else {
+            continue;
+        };
+        let payload = json!({"hostId":c.host_id,"requestId":id,"responseId":p.response.as_ref().unwrap()["responseId"],"state":"adopted","evidence":{"reason":"read-only original native dispatch reconciliation; no replay"},"replyProgress":progress});
+        let path = persist_receipt(&c.state_dir, &payload)?;
+        deliver_receipt(c, token, &path, payload)?;
+    }
+    Ok(())
 }
 
 /// Restore only durable facts. A previous engine callback is never inherited.
@@ -1540,6 +1759,11 @@ mod codex_rollout_provenance_tests {
                     sent_at: None,
                     expected: None,
                     boundary: Some(crate::reply_evidence::DispatchBoundary::capture("")),
+                    native_source: None,
+                    native_dispatch: None,
+                    recorded_progress: None,
+                    continuation_unknown: false,
+                    blocked_receipt: None,
                 },
             }
         }
@@ -1572,6 +1796,61 @@ mod codex_rollout_provenance_tests {
             let _ = fs::remove_file(self.directory.join("original.jsonl"));
             let _ = fs::remove_dir(&self.directory);
         }
+    }
+
+    #[test]
+    fn failed_pre_dispatch_preparation_durably_settles_without_waiting_for_native_output() {
+        let mut fixture = Fixture::phone_beta();
+        fixture.pending.blocked_receipt = Some((
+            "expired".into(),
+            json!({"reason":"expired before native dispatch"}),
+        ));
+        let c:Config=serde_json::from_value(json!({"hostId":"fixture-host","relayUrl":"http://127.0.0.1:0","tokenFile":fixture.directory.join("fixture-key"),"stateDir":fixture.directory,"ipcSocket":fixture.directory.join("hook.sock"),"scopes":[fixture.directory]})).unwrap();
+        assert!(settle_blocked_dispatch(
+            &c,
+            "public-fixture-key-not-a-credential",
+            &fixture.pending
+        ));
+        let entries = fs::read_dir(fixture.directory.join("receipt-outbox"))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        let receipt: Value = serde_json::from_slice(&fs::read(entries[0].path()).unwrap()).unwrap();
+        assert_eq!(receipt["state"], "expired");
+        assert!(receipt.get("replyProgress").is_none());
+        assert!(
+            !fixture
+                .directory
+                .join(format!(
+                    "dispatch-{}",
+                    fixture.pending.request["requestId"].as_str().unwrap()
+                ))
+                .exists()
+        );
+        fs::remove_dir_all(fixture.directory.join("receipt-outbox")).unwrap();
+    }
+
+    #[test]
+    fn transient_observation_gap_preserves_received_and_active_wait_until_deadline() {
+        let mut fixture = Fixture::phone_beta();
+        let observed = crate::reply_evidence::Observation {
+            received: Some(
+                json!({"proofId":"fixture-proof","kind":"codex.function_call_output","sourceDigest":"a".repeat(64),"position":3}),
+            ),
+            continued: None,
+        };
+        let first = progress_envelope(&fixture.pending, observed, false).unwrap();
+        fixture.pending.recorded_progress = Some(first.clone());
+        let gap = progress_envelope(&fixture.pending, Default::default(), false).unwrap();
+        assert_eq!(gap["received"], first["received"]);
+        assert_eq!(
+            gap["continuationObservation"], "awaiting",
+            "temporary read/partial row must keep the observer active"
+        );
+        let deadline = progress_envelope(&fixture.pending, Default::default(), true).unwrap();
+        assert_eq!(deadline["received"], first["received"]);
+        assert_eq!(deadline["continuationObservation"], "unknown");
     }
 
     #[test]

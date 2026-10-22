@@ -6,6 +6,7 @@ pub mod discovery;
 pub mod hook;
 pub mod host;
 pub mod model;
+pub mod native_receipt;
 pub mod relay;
 pub mod reply_evidence;
 pub mod reply_progress;

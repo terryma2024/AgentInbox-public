@@ -9,6 +9,7 @@ fn config(state: PathBuf, url: String) -> Config {
         state_dir: state.clone(),
         ipc_socket: state.join("ipc/hook.sock"),
         codex_socket: None,
+        native_receipt_dir: None,
         daemon_pid: None,
         scopes: vec![state],
         capture_all_directories: false,

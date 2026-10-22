@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "revision": "b4ad33d1a3c10c9652dd57f7afd7a949f8f26895",
+  "archiveUrl": "https://codeload.github.com/openai/codex/tar.gz/b4ad33d1a3c10c9652dd57f7afd7a949f8f26895",
+  "archiveSha256": "19aa87e740c27ffb2bca12cbb1cebc6594067333e31f6be5cbbf5a63592e0e47",
+  "rustToolchain": "1.99.1",
+  "license": "Apache-2.0"
+}

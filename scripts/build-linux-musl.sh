@@ -60,7 +60,7 @@ export CARGO_TARGET_DIR="$build_dir"
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$root/scripts/build-linux-zig-cc.sh"
 export CC_x86_64_unknown_linux_musl="$root/scripts/build-linux-zig-cc.sh"
 export AR_x86_64_unknown_linux_musl="$root/scripts/build-linux-zig-ar.sh"
-export RUSTFLAGS="--sysroot $sysroot -C target-feature=+crt-static -C link-self-contained=no"
+export RUSTFLAGS="--sysroot $sysroot -C target-feature=+crt-static -C link-self-contained=no --remap-path-prefix=$root=/src/AgentInbox --remap-path-prefix=$tools_dir=/build/tools --remap-path-prefix=$build_dir=/build/target --remap-path-prefix=$HOME=/build/home"
 export SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-0}"
 "$AGENTINBOX_ZIG" version
 "$RUSTC" --version --verbose

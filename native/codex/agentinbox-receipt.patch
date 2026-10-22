@@ -1,0 +1,538 @@
+--- a/codex-rs/app-server/src/outgoing_message.rs
++++ b/codex-rs/app-server/src/outgoing_message.rs
+@@ -55,0 +56,4 @@
++#[cfg(unix)]
++#[path = "agentinbox_receipt.rs"]
++mod agentinbox_receipt;
++
+@@ -131,0 +136,2 @@
++    #[cfg(unix)]
++    native_receipts: Option<Arc<agentinbox_receipt::NativeReceipts>>,
+@@ -253,0 +260,2 @@
++            #[cfg(unix)]
++            native_receipts: agentinbox_receipt::process_receipts(),
+@@ -488 +496 @@
+-        result: Result,
++        mut result: Result,
+@@ -493,0 +502,14 @@
++                #[cfg(unix)]
++                let receipt = if let Some(store) = &self.native_receipts {
++                    let callback = serde_json::to_value(&entry.request).unwrap_or_default();
++                    store
++                        .prepare(&callback, &mut result)
++                        .filter(|_| entry.request.response_from_result(result.clone()).is_ok())
++                } else {
++                    agentinbox_receipt::strip_metadata(&mut result);
++                    None
++                };
++                #[cfg(not(unix))]
++                if let Some(object) = result.as_object_mut() {
++                    object.remove("_agentinboxReceipt");
++                }
+@@ -505,0 +528,9 @@
++                } else {
++                    // Only the winner that successfully hands off the original result
++                    // can write a receipt. Missing/cancelled callbacks never reach here.
++                    #[cfg(unix)]
++                    if let (Some(store), Some(receipt)) = (&self.native_receipts, receipt)
++                        && store.persist(receipt).is_err()
++                    {
++                        warn!("AgentInbox native receipt could not be durably written");
++                    }
+@@ -1677,0 +1709,154 @@
++    #[tokio::test]
++    async fn agentinbox_metadata_never_enters_original_callback() {
++        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
++        let outgoing =
++            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
++        let (id, waiter) = outgoing
++            .send_request(ServerRequestPayload::ToolRequestUserInput(
++                ToolRequestUserInputParams {
++                    thread_id: ThreadId::new().to_string(),
++                    turn_id: "fixture-turn".into(),
++                    item_id: "fixture-call".into(),
++                    questions: vec![],
++                    is_blocking: true,
++                    auto_resolution_ms: None,
++                },
++            ))
++            .await;
++        let original = json!({"answers":{"fixture-question":{"answers":["yes"]}}});
++        let mut envelope = original.clone();
++        envelope["_agentinboxReceipt"] = json!({"schemaVersion":1,
++            "dispatchId":"10000000-0000-4000-8000-000000000001",
++            "bindingDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++            "nativeInstanceId":"20000000-0000-4000-8000-000000000001"});
++        outgoing
++            .notify_client_response(ConnectionId(1), id, envelope)
++            .await;
++        assert_eq!(waiter.await.unwrap().unwrap(), original);
++    }
++
++    #[cfg(unix)]
++    async fn receipt_fixture() -> (
++        tempfile::TempDir,
++        OutgoingMessageSender,
++        RequestId,
++        oneshot::Receiver<ClientRequestResult>,
++    ) {
++        use std::os::unix::fs::PermissionsExt;
++        let dir =
++            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
++        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
++        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
++        let mut outgoing =
++            OutgoingMessageSender::new(tx, codex_analytics::AnalyticsEventsClient::disabled());
++        outgoing.native_receipts = Some(Arc::new(
++            agentinbox_receipt::NativeReceipts::open(dir.path()).unwrap(),
++        ));
++        let (id, waiter) = outgoing
++            .send_request(ServerRequestPayload::ToolRequestUserInput(
++                ToolRequestUserInputParams {
++                    thread_id: ThreadId::new().to_string(),
++                    turn_id: "fixture-turn".into(),
++                    item_id: "fixture-call".into(),
++                    questions: vec![],
++                    is_blocking: true,
++                    auto_resolution_ms: None,
++                },
++            ))
++            .await;
++        (dir, outgoing, id, waiter)
++    }
++
++    #[cfg(unix)]
++    fn receipt_answer(dir: &std::path::Path) -> serde_json::Value {
++        let manifest: serde_json::Value =
++            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
++        json!({"answers":{"fixture-question":{"answers":["yes"]}},"_agentinboxReceipt":{
++            "schemaVersion":1,"dispatchId":"10000000-0000-4000-8000-000000000001",
++            "bindingDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++            "nativeInstanceId":manifest["nativeInstanceId"]}})
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn agentinbox_only_phone_winner_writes_exact_receipt() {
++        let (dir, outgoing, id, waiter) = receipt_fixture().await;
++        let callback = outgoing
++            .request_id_to_callback
++            .lock()
++            .await
++            .get(&id)
++            .unwrap()
++            .request
++            .clone();
++        outgoing
++            .notify_client_response(ConnectionId(2), id.clone(), receipt_answer(dir.path()))
++            .await;
++        let original = json!({"answers":{"fixture-question":{"answers":["yes"]}}});
++        assert_eq!(waiter.await.unwrap().unwrap(), original);
++        let path = dir
++            .path()
++            .join("dispatch-10000000-0000-4000-8000-000000000001.json");
++        let receipt: serde_json::Value =
++            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++        assert_eq!(receipt["callback"], serde_json::to_value(callback).unwrap());
++        assert_eq!(receipt["result"], original);
++        outgoing
++            .notify_client_response(ConnectionId(1), id, original)
++            .await;
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn agentinbox_same_value_local_winner_never_records_phone() {
++        let (dir, outgoing, id, waiter) = receipt_fixture().await;
++        let original = json!({"answers":{"fixture-question":{"answers":["yes"]}}});
++        outgoing
++            .notify_client_response(ConnectionId(1), id.clone(), original.clone())
++            .await;
++        outgoing
++            .notify_client_response(ConnectionId(2), id, receipt_answer(dir.path()))
++            .await;
++        assert_eq!(waiter.await.unwrap().unwrap(), original);
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn agentinbox_dropped_receiver_never_records_phone() {
++        let (dir, outgoing, id, waiter) = receipt_fixture().await;
++        drop(waiter);
++        outgoing
++            .notify_client_response(ConnectionId(2), id, receipt_answer(dir.path()))
++            .await;
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn agentinbox_cancelled_callback_never_records_phone() {
++        let (dir, outgoing, id, waiter) = receipt_fixture().await;
++        assert!(outgoing.cancel_request(&id).await);
++        outgoing
++            .notify_client_response(ConnectionId(2), id, receipt_answer(dir.path()))
++            .await;
++        assert!(waiter.await.is_err());
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
++
++    #[cfg(unix)]
++    #[tokio::test]
++    async fn agentinbox_invalid_binding_still_delivers_original_without_receipt() {
++        let (dir, outgoing, id, waiter) = receipt_fixture().await;
++        let mut envelope = receipt_answer(dir.path());
++        envelope["_agentinboxReceipt"]["bindingDigest"] = json!("invalid");
++        outgoing
++            .notify_client_response(ConnectionId(2), id, envelope)
++            .await;
++        assert_eq!(
++            waiter.await.unwrap().unwrap(),
++            json!({"answers":{"fixture-question":{"answers":["yes"]}}})
++        );
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
+--- /dev/null
++++ b/codex-rs/app-server/src/agentinbox_receipt.rs
+@@ -0,0 +1,339 @@
++// AgentInbox optional local receipt extension. SPDX-License-Identifier: Apache-2.0
++// This is provenance of successful oneshot handoff, not tool-output completion.
++use serde::Deserialize;
++use serde_json::{Value, json};
++use std::ffi::CString;
++use std::fs::File;
++use std::io::{self, Write};
++use std::os::fd::{AsRawFd, FromRawFd};
++use std::os::unix::ffi::OsStrExt;
++use std::path::{Component, Path};
++use std::sync::{Arc, OnceLock};
++use uuid::Uuid;
++
++pub(super) struct NativeReceipts {
++    directory: File,
++    native_instance_id: String,
++}
++
++pub(super) struct PreparedReceipt {
++    filename: String,
++    bytes: Vec<u8>,
++}
++
++#[derive(Deserialize)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++struct Metadata {
++    schema_version: u32,
++    dispatch_id: String,
++    binding_digest: String,
++    native_instance_id: String,
++}
++
++pub(super) fn process_receipts() -> Option<Arc<NativeReceipts>> {
++    static STORE: OnceLock<Option<Arc<NativeReceipts>>> = OnceLock::new();
++    STORE
++        .get_or_init(|| {
++            let path = std::env::var_os("AGENTINBOX_NATIVE_RECEIPT_DIR")?;
++            match NativeReceipts::open(Path::new(&path)) {
++                Ok(store) => Some(Arc::new(store)),
++                Err(_) => {
++                    // Do not log the private configured directory or operational identifiers.
++                    tracing::warn!(
++                        "AgentInbox native receipts disabled: unsafe or unavailable directory"
++                    );
++                    None
++                }
++            }
++        })
++        .clone()
++}
++
++pub(super) fn strip_metadata(result: &mut Value) -> Option<Value> {
++    result.as_object_mut()?.remove("_agentinboxReceipt")
++}
++
++impl NativeReceipts {
++    pub(super) fn open(path: &Path) -> io::Result<Self> {
++        // Resolve one component at a time, never following links. Retain the fd so
++        // renaming an ancestor cannot redirect any later receipt writes.
++        if !path.is_absolute() {
++            return Err(unsafe_path());
++        }
++        let mut directory = open_directory(None, c"/")?;
++        for component in path.components() {
++            match component {
++                Component::RootDir => {}
++                Component::Normal(name) => {
++                    let name = CString::new(name.as_bytes()).map_err(|_| unsafe_path())?;
++                    directory = open_directory(Some(&directory), &name)?;
++                }
++                _ => return Err(unsafe_path()),
++            }
++        }
++        check_private_directory(&directory)?;
++        let store = Self {
++            directory,
++            native_instance_id: Uuid::now_v7().to_string(),
++        };
++        let manifest = serde_json::to_vec(&json!({"schemaVersion":1,
++            "nativePid":std::process::id(),"nativeInstanceId":store.native_instance_id}))?;
++        store.write_exclusive("manifest.json", &manifest)?;
++        Ok(store)
++    }
++
++    // Always strip the envelope, including on invalid or unsupported requests.
++    // Complete callback identity is retained for independent host verification.
++    pub(super) fn prepare(&self, callback: &Value, result: &mut Value) -> Option<PreparedReceipt> {
++        let metadata: Metadata = serde_json::from_value(strip_metadata(result)?).ok()?;
++        if metadata.schema_version != 1
++            || metadata.native_instance_id != self.native_instance_id
++            || !canonical_uuid(&metadata.dispatch_id)
++            || metadata.binding_digest.len() != 64
++            || !metadata
++                .binding_digest
++                .bytes()
++                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
++            || callback.get("method")?.as_str()? != "item/tool/requestUserInput"
++        {
++            return None;
++        }
++        let bytes = serde_json::to_vec(&json!({"schemaVersion":1,
++            "nativePid":std::process::id(),"nativeInstanceId":self.native_instance_id,
++            "dispatchId":metadata.dispatch_id,"bindingDigest":metadata.binding_digest,
++            "callback":callback,"result":result}))
++        .ok()?;
++        Some(PreparedReceipt {
++            filename: format!("dispatch-{}.json", metadata.dispatch_id),
++            bytes,
++        })
++    }
++
++    pub(super) fn persist(&self, receipt: PreparedReceipt) -> io::Result<()> {
++        self.write_exclusive(&receipt.filename, &receipt.bytes)
++    }
++
++    fn write_exclusive(&self, filename: &str, bytes: &[u8]) -> io::Result<()> {
++        check_private_directory(&self.directory)?;
++        let temporary =
++            CString::new(format!(".pending-{}", Uuid::now_v7())).map_err(|_| unsafe_path())?;
++        let destination = CString::new(filename).map_err(|_| unsafe_path())?;
++        let fd = unsafe {
++            libc::openat(
++                self.directory.as_raw_fd(),
++                temporary.as_ptr(),
++                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC | libc::O_NOFOLLOW,
++                0o600,
++            )
++        };
++        if fd < 0 {
++            return Err(io::Error::last_os_error());
++        }
++        let mut file = unsafe { File::from_raw_fd(fd) };
++        let mut linked = false;
++        let outcome = (|| {
++            if unsafe { libc::fchmod(file.as_raw_fd(), 0o600) } != 0 {
++                return Err(io::Error::last_os_error());
++            }
++            file.write_all(bytes)?;
++            file.sync_all()?;
++            // linkat publishes atomically without replacing an existing file or symlink.
++            if unsafe {
++                libc::linkat(
++                    self.directory.as_raw_fd(),
++                    temporary.as_ptr(),
++                    self.directory.as_raw_fd(),
++                    destination.as_ptr(),
++                    0,
++                )
++            } != 0
++            {
++                return Err(io::Error::last_os_error());
++            }
++            linked = true;
++            if unsafe { libc::unlinkat(self.directory.as_raw_fd(), temporary.as_ptr(), 0) } != 0 {
++                return Err(io::Error::last_os_error());
++            }
++            self.directory.sync_all()
++        })();
++        if outcome.is_err() {
++            unsafe {
++                libc::unlinkat(self.directory.as_raw_fd(), temporary.as_ptr(), 0);
++            }
++            if linked {
++                unsafe {
++                    libc::unlinkat(self.directory.as_raw_fd(), destination.as_ptr(), 0);
++                }
++                let _ = self.directory.sync_all();
++            }
++        }
++        outcome
++    }
++}
++
++fn check_private_directory(directory: &File) -> io::Result<()> {
++    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
++    if unsafe { libc::fstat(directory.as_raw_fd(), metadata.as_mut_ptr()) } != 0 {
++        return Err(io::Error::last_os_error());
++    }
++    let metadata = unsafe { metadata.assume_init() };
++    if metadata.st_uid != unsafe { libc::geteuid() } || metadata.st_mode & 0o777 != 0o700 {
++        return Err(unsafe_path());
++    }
++    Ok(())
++}
++
++fn canonical_uuid(value: &str) -> bool {
++    Uuid::parse_str(value).is_ok_and(|uuid| !uuid.is_nil() && uuid.to_string() == value)
++}
++
++fn unsafe_path() -> io::Error {
++    io::Error::new(io::ErrorKind::PermissionDenied, "unsafe receipt directory")
++}
++
++fn open_directory(parent: Option<&File>, name: &std::ffi::CStr) -> io::Result<File> {
++    let fd = unsafe {
++        libc::openat(
++            parent.map_or(libc::AT_FDCWD, AsRawFd::as_raw_fd),
++            name.as_ptr(),
++            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
++        )
++    };
++    if fd < 0 {
++        Err(io::Error::last_os_error())
++    } else {
++        Ok(unsafe { File::from_raw_fd(fd) })
++    }
++}
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++    use std::os::unix::fs::{PermissionsExt, symlink};
++    const DISPATCH: &str = "10000000-0000-4000-8000-000000000001";
++    fn private_dir() -> tempfile::TempDir {
++        let dir =
++            tempfile::tempdir_in(std::fs::canonicalize(std::env::temp_dir()).unwrap()).unwrap();
++        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
++        dir
++    }
++    fn callback() -> Value {
++        json!({"id":42,"method":"item/tool/requestUserInput","params":{
++        "threadId":"fixture-thread","turnId":"fixture-turn","itemId":"fixture-call",
++        "questions":[{"id":"fixture-question","header":"Fixture","question":"Proceed?","options":[]}],"isBlocking":true}})
++    }
++    fn original() -> Value {
++        json!({"answers":{"fixture-question":{"answers":["yes"]}}})
++    }
++    fn answer(dir: &Path) -> Value {
++        let manifest: Value =
++            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
++        let mut value = original();
++        value["_agentinboxReceipt"] = json!({"schemaVersion":1,"dispatchId":DISPATCH,
++            "bindingDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
++            "nativeInstanceId":manifest["nativeInstanceId"]});
++        value
++    }
++    #[test]
++    fn strips_metadata_even_when_disabled_or_invalid() {
++        let mut result = original();
++        result["_agentinboxReceipt"] = json!({"invalid":true});
++        strip_metadata(&mut result);
++        assert_eq!(result, original());
++    }
++    #[test]
++    fn writes_private_manifest_and_exact_original_binding() {
++        let dir = private_dir();
++        let store = NativeReceipts::open(dir.path()).unwrap();
++        let manifest_path = dir.path().join("manifest.json");
++        let manifest: Value =
++            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
++        assert_eq!(manifest["schemaVersion"], 1);
++        assert_eq!(manifest["nativePid"], std::process::id());
++        assert_eq!(
++            std::fs::metadata(manifest_path)
++                .unwrap()
++                .permissions()
++                .mode()
++                & 0o777,
++            0o600
++        );
++        let mut result = answer(dir.path());
++        let prepared = store.prepare(&callback(), &mut result).unwrap();
++        assert_eq!(result, original());
++        store.persist(prepared).unwrap();
++        let path = dir.path().join(format!("dispatch-{DISPATCH}.json"));
++        let receipt: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
++        assert_eq!(receipt["callback"], callback());
++        assert_eq!(receipt["result"], original());
++        assert_eq!(receipt["nativeInstanceId"], manifest["nativeInstanceId"]);
++        assert_eq!(receipt["dispatchId"], DISPATCH);
++        assert_eq!(
++            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
++            0o600
++        );
++    }
++    #[test]
++    fn rejects_unsafe_directory_symlink_and_existing_manifest() {
++        let dir = private_dir();
++        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
++        assert!(NativeReceipts::open(dir.path()).is_err());
++        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
++        let outer = private_dir();
++        let link = outer.path().join("linked");
++        symlink(dir.path(), &link).unwrap();
++        assert!(NativeReceipts::open(&link).is_err());
++        NativeReceipts::open(dir.path()).unwrap();
++        assert!(NativeReceipts::open(dir.path()).is_err());
++    }
++    #[test]
++    fn invalid_metadata_never_creates_receipt_and_always_strips() {
++        let dir = private_dir();
++        let store = NativeReceipts::open(dir.path()).unwrap();
++        for (key, bad) in [
++            ("schemaVersion", json!(2)),
++            ("dispatchId", json!("../escape")),
++            ("bindingDigest", json!("invalid")),
++            (
++                "nativeInstanceId",
++                json!("20000000-0000-4000-8000-000000000001"),
++            ),
++            ("unknownField", json!(true)),
++        ] {
++            let mut result = answer(dir.path());
++            result["_agentinboxReceipt"][key] = bad;
++            assert!(store.prepare(&callback(), &mut result).is_none(), "{key}");
++            assert_eq!(result, original());
++        }
++        let mut result = answer(dir.path());
++        let mut wrong = callback();
++        wrong["method"] = json!("item/tool/call");
++        assert!(store.prepare(&wrong, &mut result).is_none());
++        assert_eq!(result, original());
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
++    #[test]
++    fn duplicate_dispatch_never_overwrites_winner() {
++        let dir = private_dir();
++        let store = NativeReceipts::open(dir.path()).unwrap();
++        let mut result = answer(dir.path());
++        let first = store.prepare(&callback(), &mut result).unwrap();
++        store.persist(first).unwrap();
++        let path = dir.path().join(format!("dispatch-{DISPATCH}.json"));
++        let bytes = std::fs::read(&path).unwrap();
++        let mut result = answer(dir.path());
++        let second = store.prepare(&callback(), &mut result).unwrap();
++        assert!(store.persist(second).is_err());
++        assert_eq!(std::fs::read(path).unwrap(), bytes);
++    }
++    #[test]
++    fn unsafe_permissions_after_startup_prevent_receipt_publication() {
++        let dir = private_dir();
++        let store = NativeReceipts::open(dir.path()).unwrap();
++        let mut result = answer(dir.path());
++        let prepared = store.prepare(&callback(), &mut result).unwrap();
++        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
++        assert!(store.persist(prepared).is_err());
++        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
++    }
++}
