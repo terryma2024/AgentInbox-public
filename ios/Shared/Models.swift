@@ -23,6 +23,30 @@ struct DecisionQuestion: Codable, Identifiable {
     let multiSelect: Bool
     let allowText: Bool
 }
+struct DecisionContext: Codable {
+    var taskGoal: String? = nil
+    var blockingReason: String? = nil
+    var impactScope: String? = nil
+    var originalContent: String? = nil
+}
+struct DecisionOriginalPart: Identifiable {
+    let id: String
+    let title: String
+    let text: String
+    var displayLines: [String] {
+        text.components(separatedBy: "\n").flatMap { line -> [String] in
+            if line.isEmpty { return [""] }
+            var remaining = line[...]
+            var chunks: [String] = []
+            while !remaining.isEmpty {
+                let end = remaining.index(remaining.startIndex, offsetBy: 240, limitedBy: remaining.endIndex) ?? remaining.endIndex
+                chunks.append(String(remaining[..<end]))
+                remaining = remaining[end...]
+            }
+            return chunks
+        }
+    }
+}
 struct DecisionRequest: Codable, Identifiable {
     var id: String { requestId }
     let requestId: String
@@ -48,6 +72,7 @@ struct DecisionRequest: Codable, Identifiable {
     var sessionLabel: String? = nil
     var launchSurface: String? = nil
     var operationSummary: String? = nil
+    var decisionContext: DecisionContext? = nil
     var allowText: Bool? = nil
     var responseId: String? = nil
     var bindingDigest: String? = nil
@@ -57,6 +82,41 @@ struct DecisionRequest: Codable, Identifiable {
     var sessionDisplayLabel: String? { sessionLabel.flatMap { $0.isEmpty ? nil : $0 } ?? shortSessionID }
     var projectBasename: String? { projectPath.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0).lastPathComponent } }
     var displayState: RequestState { state == .pending && !canAnswer() ? .expired : state }
+    static func contextValue(_ value: String?) -> String {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "未知" }
+        return value
+    }
+    var decisionPreview: String {
+        let content = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return content.isEmpty ? "未知" : String(content.prefix(180)) + (content.count > 180 ? "…（查看完整原文）" : "")
+    }
+    var hasOriginalContent: Bool {
+        decisionContext?.originalContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+    var originalParts: [DecisionOriginalPart] {
+        if hasOriginalContent, let original = decisionContext?.originalContent {
+            return DecisionMessages.parts(from: original)
+        }
+        // Legacy requests lack a separate native original. Keep every available
+        // question and option, including after the request can no longer be answered.
+        let legacyTool = ["permission", "approval"].contains(kind) ? DecisionMessages.legacyToolParts(from: body) : nil
+        var parts = legacyTool ?? [.init(id: "body", title: "请求正文（旧版）", text: Self.contextValue(body))]
+        if let operationSummary, !operationSummary.isEmpty, operationSummary != body {
+            parts.append(.init(id: "operation", title: "操作内容（旧版）", text: operationSummary))
+        }
+        if (questions ?? []).isEmpty, !options.isEmpty {
+            parts.append(.init(id: "options", title: "请求选项", text: options.map(\.label).joined(separator: "\n")))
+        }
+        for (index, question) in (questions ?? []).enumerated() {
+            let options = question.options.map { $0.label }.joined(separator: "\n")
+            parts.append(.init(id: "question-\(index)", title: "问题 \(index + 1) · \(Self.contextValue(question.header))", text: question.prompt))
+            if !options.isEmpty { parts.append(.init(id: "options-\(index)", title: "问题 \(index + 1) 的选项", text: options)) }
+        }
+        return parts
+    }
+    var originalCopyText: String {
+        return originalParts.map { $0.title + "\n" + $0.text }.joined(separator: "\n\n")
+    }
     var canAnswerInWidget: Bool {
         guard canAnswer(), !multiSelect, ["choice", "approval", "permission"].contains(kind),
               !options.isEmpty, options.count <= 3, options.allSatisfy({ $0.label.count <= 16 }),
@@ -69,7 +129,36 @@ struct DecisionRequest: Codable, Identifiable {
             guard let summary = operationSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !summary.isEmpty, summary.count <= 60, body.contains(summary) else { return false }
         }
-        return true
+        return widgetContextIsFullyVisible
+    }
+    private var widgetContextIsFullyVisible: Bool {
+        guard let context = decisionContext else { return true }
+        for value in [context.taskGoal, context.blockingReason, context.impactScope] {
+            if let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !body.contains(value) { return false }
+        }
+        guard let original = context.originalContent, let data = original.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        if ["permission", "approval"].contains(kind) {
+            // Extra permission/network/tool parameters require the full detail page.
+            guard Set(raw.keys).isSubset(of: ["command", "cwd", "reason"]),
+                  let command = raw["command"] as? String, command == operationSummary else { return false }
+            return ["command", "cwd", "reason"].allSatisfy { key in
+                guard let value = raw[key], !(value is NSNull) else { return true }
+                guard let text = value as? String else { return false }
+                return text.isEmpty || body.contains(text)
+            }
+        }
+        guard Set(raw.keys) == ["questions"], let questions = raw["questions"] as? [[String: Any]], questions.count == 1,
+              let question = questions.first, question["question"] as? String == body,
+              Set(question.keys).isSubset(of: ["id", "header", "question", "options", "isOther", "isSecret"]),
+              let originalOptions = question["options"] as? [[String: Any]], originalOptions.count == options.count else { return false }
+        if let header = question["header"], !(header is NSNull) {
+            guard let text = header as? String, text.isEmpty || body.contains(text) else { return false }
+        }
+        return zip(originalOptions, options).allSatisfy { rawOption, option in
+            Set(rawOption.keys).isSubset(of: ["label", "description"]) && rawOption["label"] as? String == option.label &&
+                (rawOption["description"] == nil || rawOption["description"] is NSNull || (rawOption["description"] as? String) == "")
+        }
     }
     var deepLink: URL { URL(string: "agentinbox://request/\(requestId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? requestId)")! }
     static var demo: Self {
@@ -77,6 +166,13 @@ struct DecisionRequest: Codable, Identifiable {
     }
     static func demoFixture(id: String, title: String, kind: String, options: [DecisionOption], multiSelect: Bool = false, questions: [DecisionQuestion]? = nil, allowText: Bool? = nil) -> Self {
         Self(requestId: id, revision: 1, expiresAt: Date().addingTimeInterval(3600).timeIntervalSince1970, state: .pending, kind: kind, hostId: "mac-mini", engine: "claude", runtimeId: "demo", sessionId: "demo-session", turnId: "demo-turn", nativeRequestId: "demo-native", itemId: nil, title: title, body: kind == "text" ? "请用中文说明你希望采用的处理方式。" : "请选择希望执行的检查，可选择多项。", options: options, multiSelect: multiSelect, createdAt: Date().timeIntervalSince1970, updatedAt: Date().timeIntervalSince1970, questions: questions, allowText: allowText)
+    }
+
+    static var contextDemo: Self {
+        let command = (1...80).map { "echo fixture-line-\($0)" }.joined(separator: "\n") + "\n末尾关键参数 --target example.invalid"
+        let data = try! JSONSerialization.data(withJSONObject: ["command": command, "cwd": "/srv/example-project"], options: [.prettyPrinted, .sortedKeys])
+        let original = String(decoding: data, as: UTF8.self)
+        return Self(requestId: "demo-context", revision: 1, expiresAt: Date().addingTimeInterval(3600).timeIntervalSince1970, state: .pending, kind: "permission", hostId: "fixture-host", engine: "codex", runtimeId: "fixture-runtime", sessionId: "fixture-session", turnId: "fixture-turn", nativeRequestId: "fixture-native", itemId: nil, title: "批准示例检查", body: "运行示例项目检查；完整命令包含多行参数。", options: [.init(id: "allow", label: "批准一次"), .init(id: "deny", label: "拒绝")], multiSelect: false, createdAt: Date().timeIntervalSince1970, updatedAt: Date().timeIntervalSince1970, questions: nil, projectPath: "/srv/example-project", sessionLabel: "示例检查任务", decisionContext: .init(taskGoal: "核对示例项目检查结果", blockingReason: "等待批准示例命令", impactScope: nil, originalContent: original))
     }
 
 }

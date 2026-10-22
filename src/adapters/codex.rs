@@ -72,7 +72,7 @@ pub fn product_request(
             }
             format!(
                 "命令：{command}\n工作目录：{}",
-                p["cwd"].as_str().unwrap_or("见原任务")
+                p["cwd"].as_str().unwrap_or("未知")
             )
         } else {
             return Err("file approval lacks verified full diff; keep in native UI".into());
@@ -83,9 +83,37 @@ pub fn product_request(
             .unwrap_or("Agent 等待回答")
             .to_string()
     };
-    Ok(
-        json!({"requestId":uuid::Uuid::new_v4().to_string(),"revision":1,"expiresAt":now+ttl,"state":"pending","kind":if approval {"permission"} else if questions.len()==1 {"choice"} else {"questions"},"hostId":host,"engine":"codex","launchSurface":"unknown","runtimeId":runtime,"sessionId":p["threadId"],"turnId":p["turnId"],"nativeRequestId":m["id"].to_string(),"itemId":p["itemId"],"operationSummary":if approval{p["command"].clone()}else{Value::Null},"title":if approval {"Codex 需要审批"} else {"Codex 等待回答"},"body":body,"options":options,"questions":questions,"multiSelect":false,"allowText":!approval,"createdAt":now,"updatedAt":now,"native":{"callback":m}}),
-    )
+    // Export decision content, not the host-only callback or transport identity.
+    let mut original = serde_json::Map::new();
+    let fields: &[&str] = if approval {
+        &[
+            "command",
+            "commandActions",
+            "environmentId",
+            "kind",
+            "cwd",
+            "reason",
+            "additionalPermissions",
+            "networkApprovalContext",
+            "proposedExecpolicyAmendment",
+            "proposedNetworkPolicyAmendments",
+        ]
+    } else {
+        &["questions"]
+    };
+    for field in fields {
+        if let Some(value) = p.get(*field) {
+            original.insert((*field).into(), value.clone());
+        }
+    }
+    let original = serde_json::to_string_pretty(&original).map_err(|e| e.to_string())?;
+    if sensitive(&original) {
+        return Err("potential secret in decision context; keep in native UI".into());
+    }
+    let mut request = json!({"requestId":uuid::Uuid::new_v4().to_string(),"revision":1,"expiresAt":now+ttl,"state":"pending","kind":if approval {"permission"} else if questions.len()==1 {"choice"} else {"questions"},"hostId":host,"engine":"codex","launchSurface":"unknown","runtimeId":runtime,"sessionId":p["threadId"],"turnId":p["turnId"],"nativeRequestId":m["id"].to_string(),"itemId":p["itemId"],"operationSummary":if approval{p["command"].clone()}else{Value::Null},"title":if approval {"Codex 需要审批"} else {"Codex 等待回答"},"body":body,"options":options,"questions":questions,"multiSelect":false,"allowText":!approval,"createdAt":now,"updatedAt":now,"native":{"callback":m}});
+    request["projectPath"] = p["cwd"].clone();
+    request["decisionContext"] = json!({"taskGoal":null,"blockingReason":if approval {p["reason"].clone()} else {Value::Null},"impactScope":null,"originalContent":original});
+    Ok(request)
 }
 pub fn response(m: &Value, request: &Value, reply: &Value) -> Result<Value, String> {
     if !same_callback(m, &request["native"]["callback"])

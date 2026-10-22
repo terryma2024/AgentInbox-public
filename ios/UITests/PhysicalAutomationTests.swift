@@ -26,6 +26,83 @@ final class PhysicalAutomationTests: XCTestCase {
         return false
     }
 
+    func testDecisionContextOriginalOnPhysicalPhone() throws {
+        try requirePhysicalAuthorization()
+        let env = ProcessInfo.processInfo.environment
+        guard env["AGENTINBOX_CONTEXT_ACCEPTANCE"] == "1",
+              let data = env["AGENTINBOX_PHYSICAL_BINDING_JSON"]?.data(using: .utf8),
+              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let request = envelope["request"] as? [String: Any],
+              let requestID = request["requestId"] as? String,
+              let host = request["hostId"] as? String,
+              let project = request["projectPath"] as? String,
+              let context = request["decisionContext"] as? [String: Any],
+              let original = context["originalContent"] as? String,
+              let mode = envelope["contextCase"] as? String,
+              ["question", "command"].contains(mode) else {
+            throw XCTSkip("需显式提供隔离上下文验收题的精确绑定")
+        }
+        let marker = mode == "question" ? "CONTEXT_QUESTION_END" : "CONTEXT_COMMAND_END"
+        guard original.contains(marker), (request["expiresAt"] as? Double ?? 0) > Date().timeIntervalSince1970,
+              let native = request["native"] as? [String: Any], let callback = native["callback"] as? [String: Any],
+              let params = callback["params"] as? [String: Any],
+              request["sessionId"] as? String == params["threadId"] as? String,
+              request["turnId"] as? String == params["turnId"] as? String,
+              request["itemId"] as? String == params["itemId"] as? String else {
+            XCTFail("上下文验收必须来自同一个有效原调用"); return
+        }
+        let app = XCUIApplication(); app.launch()
+        let row = app.buttons["request.\(requestID)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 30)); row.tap()
+        func reveal(_ element: XCUIElement, upward: Bool = true) {
+            for _ in 0..<18 where !element.isHittable { if upward { app.swipeUp() } else { app.swipeDown() } }
+            XCTAssertTrue(element.isHittable)
+        }
+        let expected = ["machine": host, "project": project,
+                        "goal": context["taskGoal"] as? String ?? "未知",
+                        "reason": context["blockingReason"] as? String ?? "未知",
+                        "scope": context["impactScope"] as? String ?? "未知"]
+        for key in ["machine", "project", "goal", "reason", "scope"] {
+            let field = app.staticTexts["decision-context.\(key)"]; reveal(field)
+            XCTAssertTrue(field.label == expected[key], "手机上下文字段必须与绑定的原请求一致：\(key)")
+        }
+        let details = XCTAttachment(screenshot: app.screenshot()); details.name = "physical-decision-context"; details.lifetime = .keepAlways; add(details)
+        let full = app.buttons["decision-original"]; reveal(full, upward: false); full.tap()
+        XCTAssertTrue(app.navigationBars["完整原文"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["完整原始参数"].exists)
+        if mode == "question", let questions = params["questions"] as? [[String: Any]],
+           let prompt = questions.first?["question"] as? String {
+            let firstLine = app.staticTexts["decision-original.question-0.0"]
+            XCTAssertTrue(firstLine.waitForExistence(timeout: 5))
+            XCTAssertTrue(firstLine.label == prompt.components(separatedBy: "\n")[0], "原文必须直接展示消息内容")
+        } else if let command = params["command"] as? String {
+            let firstLine = app.staticTexts["decision-original.command.0"]
+            XCTAssertTrue(firstLine.waitForExistence(timeout: 5))
+            XCTAssertTrue(firstLine.label == command.components(separatedBy: "\n")[0], "命令必须按原始消息展示")
+        }
+        let tail = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", marker)).firstMatch
+        reveal(tail)
+        let end = XCTAttachment(screenshot: app.screenshot()); end.name = "physical-original-tail"; end.lifetime = .keepAlways; add(end)
+        XCTAssertTrue(app.buttons["copy-decision-original"].exists)
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let option = app.buttons[mode == "question" ? "option.q0-o1" : "option.deny"]
+        reveal(option); option.tap()
+        let submit = app.buttons["submit-decision"]; reveal(submit); XCTAssertTrue(submit.isEnabled); submit.tap()
+        let submitted = app.descendants(matching: .any)["reply-step.submitted"]; reveal(submitted, upward: false)
+        func confirmed(_ element: XCUIElement) -> Bool {
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已确认"), object: element)], timeout: 35) == .completed
+        }
+        XCTAssertTrue(confirmed(submitted))
+        if mode == "question" {
+            let received = app.descendants(matching: .any)["reply-step.received"]
+            let continued = app.descendants(matching: .any)["reply-step.continued"]
+            XCTAssertTrue(confirmed(received)); XCTAssertEqual(continued.value as? String, "未确认")
+            print("AGENTINBOX_PHYSICAL_RECEIVED_CONFIRMED")
+            XCTAssertTrue(confirmed(continued))
+        }
+        print("AGENTINBOX_PHYSICAL_CONTEXT_ACCEPTED")
+    }
+
     func testPairingFileAndPushRegistration() throws {
         try requirePhysicalAuthorization()
         let app = XCUIApplication()

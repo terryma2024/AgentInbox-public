@@ -70,7 +70,9 @@ final class InboxStore: ObservableObject {
                 requests.append(.demoFixture(id: "demo-text", title: "说明处理方式", kind: "text", options: []))
                 requests.append(.demoFixture(id: "demo-multi", title: "选择需要的检查", kind: "choice", options: [.init(id: "unit", label: "单元测试"), .init(id: "lint", label: "代码检查")], multiSelect: true))
                 for request in requests { InboxConfiguration.defaults.removeObject(forKey: "response.\(request.id).\(request.revision)") }
-            } } }
+            }
+            if ProcessInfo.processInfo.arguments.contains("--demo-context") { requests = [.contextDemo]; openedRequestID = "demo-context" }
+        } }
     func consumePairingFileIfRequested() async {
         #if DEBUG
         guard ProcessInfo.processInfo.arguments.contains("--consume-pairing-file"), !consumedPairingFile else { return }
@@ -350,9 +352,24 @@ struct DecisionDetailContent: View {
         Form {
             Section {
                 Text(request.title).font(.title2.weight(.semibold))
-                Text(request.body).font(.body)
-                HStack { Label(request.engine.uppercased(), systemImage: "terminal"); Spacer(); Text(request.hostId) }.font(.caption).foregroundStyle(.secondary)
-                if request.launchSurface == "unknown" { Text("原生请求；终端来源未确认").font(.footnote).foregroundStyle(.secondary) }
+                Text(request.decisionPreview).font(.body)
+                Text("摘要 · 完整问题、命令及参数见下方原文").font(.caption).foregroundStyle(.secondary)
+                NavigationLink {
+                    DecisionOriginalView(request: request)
+                } label: {
+                    Label("查看完整原文", systemImage: "doc.text.magnifyingglass")
+                }.accessibilityIdentifier("decision-original")
+            }
+            Section("决策上下文") {
+                contextField("机器", value: request.hostId, id: "machine")
+                contextField("项目", value: request.projectPath, id: "project")
+                contextField("任务目标", value: request.decisionContext?.taskGoal, id: "goal")
+                contextField("阻塞原因", value: request.decisionContext?.blockingReason, id: "reason")
+                contextField("影响范围", value: request.decisionContext?.impactScope, id: "scope")
+                contextField("引擎", value: request.engine, id: "engine")
+                contextField("会话", value: request.sessionDisplayLabel, id: "session")
+                if request.launchSurface == nil || request.launchSurface == "unknown" { Text("终端来源：未知").font(.footnote).foregroundStyle(.secondary) }
+                if !request.hasOriginalContent { Text("独立原文：未知；可查看此请求保存的全部题面。").font(.footnote).foregroundStyle(.secondary) }
             }
             Section("当前状态") {
                 let status = request.replyStatus(for: store.isDemo ? nil : ResponseJournal.pending(for: request)?.responseId)
@@ -415,10 +432,6 @@ struct DecisionDetailContent: View {
             }
             if let error { Section { Text(error).foregroundStyle(.orange) } }
             Section("请求信息") {
-                if let projectPath = request.projectPath, !projectPath.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) { Text("项目").font(.caption).foregroundStyle(.secondary); Text(projectPath).font(.footnote).textSelection(.enabled).fixedSize(horizontal: false, vertical: true) }
-                }
-                if let session = request.sessionDisplayLabel { LabeledContent("会话", value: session) }
                 LabeledContent("版本", value: "\(request.revision)")
                     .accessibilityElement(children: .ignore).accessibilityLabel("版本")
                     .accessibilityValue("\(request.revision)").accessibilityIdentifier("request-revision")
@@ -431,6 +444,14 @@ struct DecisionDetailContent: View {
         .toolbar {
             Button("显示在小组件") { InboxConfiguration.widgetRequestID = request.id; WidgetCenter.shared.reloadAllTimelines() }.font(.caption)
             Button { Task { await store.refresh() } } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("刷新请求")
+        }
+    }
+    func contextField(_ title: String, value: String?, id: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(verbatim: DecisionRequest.contextValue(value)).textSelection(.enabled)
+                .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("decision-context.\(id)")
         }
     }
     func milestone(_ title: String, confirmed: Bool, id: String) -> some View {
@@ -475,6 +496,44 @@ struct DecisionDetailContent: View {
         catch { self.error = error.localizedDescription; await checkRecovery() }
     }
 }
+struct DecisionOriginalView: View {
+    let request: DecisionRequest
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                Text(request.title).font(.headline)
+                Text(verbatim: "机器：\(DecisionRequest.contextValue(request.hostId))\n项目：\(DecisionRequest.contextValue(request.projectPath))")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if !request.hasOriginalContent {
+                    Text("独立原文：未知。以下为旧版请求保存的全部正文、问题及选项，无法确认是否包含全部原生参数。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(request.originalParts) { part in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(part.title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(part.displayLines.enumerated()), id: \.offset) { index, line in
+                                Text(verbatim: line.isEmpty ? " " : line)
+                                    .font(part.id == "command" ? .system(.body, design: .monospaced) : .body).textSelection(.enabled)
+                                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityIdentifier("decision-original.\(part.id).\(index)")
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding()
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding()
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("完整原文").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button("复制完整原文") { UIPasteboard.general.string = request.originalCopyText }
+                .accessibilityIdentifier("copy-decision-original")
+        }
+    }
+}
+
 struct HostsView: View {
     @EnvironmentObject var store: InboxStore
     @EnvironmentObject var tailnet: TailnetStore
