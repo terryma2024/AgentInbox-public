@@ -130,14 +130,14 @@ final class InboxStore: ObservableObject {
         async let widgetRegistration: Void = WidgetPushRegistration.reconcile()
         do {
             let updated = try await api.requests()
-            guard generation == connectionGeneration, connection == InboxConfiguration.relayConnection else { return }
+            guard !Task.isCancelled, generation == connectionGeneration, connection == InboxConfiguration.relayConnection else { return }
             requests = updated; error = nil; lastRefresh = Date()
             InboxCache.save(CachedInbox(requests: requests, refreshedAt: lastRefresh, error: nil), for: connection)
             WidgetCenter.shared.reloadAllTimelines()
             let updatedHosts = (try? await api.hosts()) ?? []
-            guard generation == connectionGeneration, connection == InboxConfiguration.relayConnection else { return }
+            guard !Task.isCancelled, generation == connectionGeneration, connection == InboxConfiguration.relayConnection else { return }
             hosts = updatedHosts
-        } catch { if generation == connectionGeneration, connection == InboxConfiguration.relayConnection { self.error = error.localizedDescription } }
+        } catch { if !Task.isCancelled, generation == connectionGeneration, connection == InboxConfiguration.relayConnection { self.error = error.localizedDescription } }
         await widgetRegistration
     }
     func relayDidChange() {
@@ -219,11 +219,17 @@ struct InboxRootView: View {
         .task {
             if store.runsTailnetDiscovery { await tailnet.restore() }
         }
-        .task {
+        .task(id: phase) {
+            // A task without an identity retains the phase captured at launch.
+            // Restart when the scene activates so detail views keep receiving progress.
+            guard phase == .active else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 8_000_000_000)
                 guard !Task.isCancelled else { return }
-                if phase == .active { await store.refresh() }
+                #if DEBUG
+                InteractionDiagnostics.record(.appRefreshPollActive)
+                #endif
+                await store.refresh()
             }
         }
         .task {
@@ -414,6 +420,8 @@ struct DecisionDetailContent: View {
                 }
                 if let session = request.sessionDisplayLabel { LabeledContent("会话", value: session) }
                 LabeledContent("版本", value: "\(request.revision)")
+                    .accessibilityElement(children: .ignore).accessibilityLabel("版本")
+                    .accessibilityValue("\(request.revision)").accessibilityIdentifier("request-revision")
                 LabeledContent("有效期", value: Date(timeIntervalSince1970: request.expiresAt).formatted(date: .omitted, time: .standard))
                 Text(request.requestId).font(.caption.monospaced()).textSelection(.enabled)
             }

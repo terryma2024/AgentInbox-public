@@ -15,5 +15,6 @@
   "captureLoadedNative": true,
   "daemonPeerPid": null,
   "excludedSessionIds": [],
-  "captureAllDirectories": false
+  "captureAllDirectories": false,
+  "nativeReceiptDir": null
 }

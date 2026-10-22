@@ -1,8 +1,8 @@
 # 验收状态 · 2026-10-22
 
-## 回复可靠闭环代码阶段（2026-10-22）
+## 回复可靠闭环原生与真机验收（2026-10-22）
 
-分步回执协议、持久 journal 与恢复防重投、App/Widget 进度展示及本地验证已完成，结果与边界见 [回复闭环记录](REPLY-RELIABILITY.md)。当前原生适配器无法排除同值竞答的来源歧义，保守显示“原答案匹配，来源未确认”，不生成新的 received/continued；正向三步协议 fixture 不等于真实引擎支持。本轮未部署、未安装真机，下一版需求第 2 项尚未计为完整验收通过。
+可选 Codex 原生胜者证明、原调用输出核对及独立继续运行观察已实现；生产 relay 已升级，真实 iPhone App 三步闭环与 App 已停止时的 Widget 独立验收均通过，第 2 项按该实测组合完成。Rust 全套 130 通过、0 失败、3 忽略；原生扩展 12 个新增测试、所在模块共 44 项通过，受控真实引擎与生产 relay 的重复提交、丢回执响应、host 退出恢复和同值竞答均通过。未替换现用 Mac/Linux Codex；未扩展 Codex 与当前 Claude 仍保持“来源未确认”。[回复闭环记录](REPLY-RELIABILITY.md)及[来源核查](REPLY-NATIVE-PROOF-AUDIT.md)区分实际支持、确定性模型和未验证组合。
 
 ## 当前方案变更（2026-10-21）
 
@@ -36,7 +36,7 @@
 
 ## 当前交接
 
-2026-10-17：host-a漏报已定位为遗留drain＋仅测试目录范围。用户明确要求不限目录／仅新会话，已在16:21:17（北京时间）启用captureAllDirectories，447个旧会话标识持久排除，新host3355156保持开启；正常daemon2367003、Herdr、日本relay未重启。原范围外/home/developer的新Codex0.163.0真实捕获、APNs首次发送、本机Alpha唯一采用及handledLocally通过；未将APNs接受等同真机送达。完整原生100通过／0失败／3 ignored（2条件演练＋1子进程入口）。[恢复、证据边界与当前操作](HOST-A-CAPTURE-RECOVERY.md)。以下按日期保留历史drain／版本记录，不当作当前host-a配置。
+2026-10-17：host-a漏报已定位为遗留drain＋仅测试目录范围。用户明确要求不限目录／仅新会话，已在16:21:17（北京时间）启用captureAllDirectories，447个旧会话标识持久排除，新host3355156保持开启；正常daemon2367003、Herdr、日本relay未重启。原范围外/srv/example-project的新Codex0.163.0真实捕获、APNs首次发送、本机Alpha唯一采用及handledLocally通过；未将APNs接受等同真机送达。完整原生100通过／0失败／3 ignored（2条件演练＋1子进程入口）。[恢复、证据边界与当前操作](HOST-A-CAPTURE-RECOVERY.md)。以下按日期保留历史drain／版本记录，不当作当前host-a配置。
 
 2026-10-16 20:01：[host-b Claude2.1.301本机复测](HOST-B-CLAUDE-LOCAL.md)通过真实默认hook捕获、原生helper自然到期、同题恢复本机选择及唯一Beta工具结果。直接SSH的403与未加载用户zsh既有代理环境相符；正常shell输入零参数claude后成功，未改登录／代理／settings。relay原题expired、设备回复0，手机远程采用仍待验。自有CLI与tmux已清理，host／relay原PID保持。
 

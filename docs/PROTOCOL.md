@@ -4,7 +4,7 @@
 
 ## 请求与答案
 
-2026-10-22 源码新增分步回执；尚未计为已部署入口。新字段及兼容语义见本文“回复分步回执”和 [本轮验证边界](REPLY-RELIABILITY.md)。
+2026-10-22 分步回执已部署至 relay；引擎支持仍按入口区分。新字段及兼容语义见本文“回复分步回执”和 [本轮验证边界](REPLY-RELIABILITY.md)。
 
 Request JSON（Swift Codable 同名）：
 
@@ -90,6 +90,8 @@ host 在原 receipt 中增加 replyProgress 证明包：schemaVersion=1、上述
 relay 以事务累积、幂等合并。同 proofId 不同内容拒绝，较低阶段迟到不回退；空证明、错绑定、非因果顺序或不合法版本拒绝。observation 为 awaiting、unknown、unsupported、confirmed；confirmed 必须同时有 continued。真实执行及获胜来源仍由受信任 host 负责证明，relay 不独立查看引擎 transcript。
 
 当前适配器只有答案内容匹配而无胜者归属证明时，发送 nativeObservation=answerSourceUnconfirmed，保持旧 adopted 状态但不创建 received/continued。此标记不能与新证明同时出现或覆盖已有接收证明；后续真正可归属的证明可以替代先前的不确定观察。旧 adopted 亦不自动补齐新步骤。自然语言 marker 不再是新版 host 的充分采用依据。
+
+可选 Codex 扩展通过 `nativeReceiptDir` 显式启用。host 验证私有 manifest 与实际 Unix 对端，派发前持久记录，并在 JSON-RPC result 的答案 map 外附加 `_agentinboxReceipt`。引擎在原回调仲裁位置记胜者、剥离元数据；host 还须验证原调用结构化输出才发布 received，后续原链进展独立发布 continued。胜者文件缺失不触发重发；历史恢复只读旧绑定，不继承 callback。文件与版本契约见 [native/codex](../native/codex/README.md)。
 
 新 host 发送这些字段前验证 relay 能力；未知能力/网络失败保留持久回执，不能把旧 relay 忽略扩展字段的 200 当作分步成功。outbox 对每个累积证明独立持久保存，顺序不影响合并；认证 relay 的确定 409 冲突进入私有归档，断线继续重送回执，绝不再输出答案。
 

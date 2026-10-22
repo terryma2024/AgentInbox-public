@@ -138,6 +138,10 @@ final class PhysicalAutomationTests: XCTestCase {
             if label == "Beta" { betaID = id }
         }
         guard let betaID else { XCTFail("No exact Beta option"); return }
+        if ProcessInfo.processInfo.environment["AGENTINBOX_REPLY_WIDGET_ACCEPTANCE"] == "1" {
+            try runExactWidgetBeta(requestID: requestID, revision: revision, betaID: betaID)
+            return
+        }
         let app = XCUIApplication()
         app.launchArguments = ["--write-diagnostics"]
         app.launch()
@@ -148,11 +152,11 @@ final class PhysicalAutomationTests: XCTestCase {
         let questionText = app.staticTexts["AGENTINBOX_CHOOSE_ROUTE"]
         XCTAssertTrue(questionText.firstMatch.waitForExistence(timeout: 8))
         let identityText = app.staticTexts[requestID]
-        let versionRow = app.cells.containing(.staticText, identifier: "版本").firstMatch
+        let versionRow = app.descendants(matching: .any)["request-revision"]
         for _ in 0..<6 where !identityText.isHittable || !versionRow.isHittable { app.swipeUp() }
         XCTAssertTrue(identityText.exists, "Detail must display the exact authorized product request ID")
         XCTAssertTrue(versionRow.exists)
-        XCTAssertTrue(versionRow.staticTexts[String(revision)].exists, "Detail must display the exact authorized revision")
+        XCTAssertEqual(versionRow.value as? String, String(revision), "Detail must display the exact authorized revision")
         guard Date().timeIntervalSince1970 < expires.doubleValue else { XCTFail("Fixture expired before selection"); return }
         let beta = app.buttons.matching(identifier: "option.\(betaID)")
         for _ in 0..<6 where !beta.firstMatch.isHittable { app.swipeDown() }
@@ -167,17 +171,99 @@ final class PhysicalAutomationTests: XCTestCase {
               Date().timeIntervalSince1970 < expires.doubleValue else {
             XCTFail("Original request is no longer actionable before its only submission"); return
         }
+        let progressAcceptance = ProcessInfo.processInfo.environment["AGENTINBOX_REPLY_PROGRESS_ACCEPTANCE"] == "1"
+        let received = app.descendants(matching: .any)["reply-step.received"]
+        let continued = app.descendants(matching: .any)["reply-step.continued"]
+        if progressAcceptance {
+            for _ in 0..<6 where !received.isHittable { app.swipeDown() }
+            XCTAssertEqual(received.value as? String, "未确认")
+            XCTAssertEqual(continued.value as? String, "未确认")
+            for _ in 0..<6 where !submit.isHittable { app.swipeUp() }
+            guard submit.isHittable, submit.isEnabled else { XCTFail("Exact original submit control is unavailable"); return }
+        }
         submit.tap() // Exactly one submission; failure below never retries or switches requests.
-        let adopted = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@", "request-state", "原任务已采用")).firstMatch
-        for _ in 0..<6 where !adopted.isHittable { app.swipeDown() }
-        XCTAssertTrue(adopted.waitForExistence(timeout: 75), "Only the original adopted state counts as success")
+        if progressAcceptance {
+            for _ in 0..<6 where !received.isHittable { app.swipeDown() }
+            func confirmed(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+                XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "已确认"), object: element)], timeout: timeout) == .completed
+            }
+            let submitted = app.descendants(matching: .any)["reply-step.submitted"]
+            XCTAssertTrue(confirmed(submitted, timeout: 30), "Durable relay submission must be confirmed")
+            XCTAssertTrue(confirmed(received, timeout: 30), "Original source-attributed reception must be confirmed")
+            XCTAssertEqual(continued.value as? String, "未确认", "Controlled native continuation must still be held")
+            // The private qualification driver releases its controlled model only
+            // after this UI assertion. This never becomes part of an agent answer.
+            print("AGENTINBOX_PHYSICAL_RECEIVED_CONFIRMED")
+            XCTAssertTrue(confirmed(continued, timeout: 40), "Original execution must independently continue")
+        } else {
+            let adopted = app.staticTexts.matching(NSPredicate(format: "identifier == %@ AND label == %@", "request-state", "原任务已采用")).firstMatch
+            for _ in 0..<6 where !adopted.isHittable { app.swipeDown() }
+            XCTAssertTrue(adopted.waitForExistence(timeout: 75), "Only the original adopted state counts as success")
+        }
         var proof: [String: Any] = identities
         proof["requestId"] = requestID; proof["revision"] = revision; proof["optionId"] = betaID
         proof["submissionTapCount"] = 1; proof["state"] = "adopted"
+        proof["independentReplyMilestonesChecked"] = progressAcceptance
         let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: proof, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
         attachment.name = "physical-isolated-original-beta-binding-proof"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    private func runExactWidgetBeta(requestID: String, revision: Int, betaID: String) throws {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(app.buttons["request.\(requestID)"].waitForExistence(timeout: 30))
+        app.terminate()
+        XCTAssertEqual(app.state, .notRunning, "Widget acceptance must start with the App stopped")
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        springboard.activate()
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        springboard.swipeRight() // Include the Today View before scanning Home Screen pages.
+        let beta = springboard.buttons["widget.option.\(requestID).\(revision).\(betaID)"]
+        for page in 0..<7 {
+            if beta.exists { break }
+            let refresh = springboard.buttons["widget.refresh"].firstMatch
+            if refresh.exists && refresh.isHittable {
+                refresh.tap() // Read-only refresh of the actual Widget; never submits.
+                _ = beta.waitForExistence(timeout: 10)
+            }
+            if beta.exists { break }
+            let tree = XCTAttachment(string: springboard.debugDescription)
+            tree.name = "private-widget-surface-page-\(page)"; tree.lifetime = .keepAlways; add(tree)
+            let screenshot = XCTAttachment(screenshot: springboard.screenshot())
+            screenshot.name = "private-widget-screen-page-\(page)"; screenshot.lifetime = .keepAlways; add(screenshot)
+            if page < 6 { springboard.swipeLeft() }
+        }
+        guard beta.waitForExistence(timeout: 10), beta.isHittable else {
+            XCTFail("Exact authorized Beta must be visible on a medium or large physical Widget; no alternate request is allowed")
+            return
+        }
+        beta.tap() // One AppIntent invocation; never fall back to the App submission path.
+        XCTAssertNotEqual(app.state, .runningForeground)
+        let received = springboard.staticTexts["原调用已接收"]
+        let refresh = springboard.buttons["widget.refresh"].firstMatch
+        let deadline = Date().addingTimeInterval(25)
+        while !received.exists && Date() < deadline {
+            if refresh.exists && refresh.isHittable { refresh.tap() }
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+        }
+        let receivedBeforeContinuation = received.exists
+        XCTAssertTrue(receivedBeforeContinuation, "Physical Widget must independently refresh the original reception milestone")
+        XCTAssertNotEqual(app.state, .runningForeground)
+        print("AGENTINBOX_PHYSICAL_RECEIVED_CONFIRMED")
+        let empty = springboard.staticTexts["暂无待决问题"]
+        let completionDeadline = Date().addingTimeInterval(40)
+        while !empty.exists && Date() < completionDeadline {
+            if refresh.exists && refresh.isHittable { refresh.tap() }
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+        }
+        XCTAssertTrue(empty.exists, "Completed original execution must leave the active Widget inbox")
+        XCTAssertNotEqual(app.state, .runningForeground)
+        let proof: [String: Any] = ["physicalDevice": true, "requestId": requestID, "revision": revision,
+                                  "optionId": betaID, "submissionTapCount": 1, "appForegroundOpenedByAnswer": false,
+                                  "receivedVisibleBeforeContinuation": receivedBeforeContinuation, "completedRequestLeftActiveInbox": empty.exists]
+        let attachment = XCTAttachment(data: try JSONSerialization.data(withJSONObject: proof, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        attachment.name = "physical-widget-exact-beta-milestones-proof"; attachment.lifetime = .keepAlways; add(attachment)
     }
 
 }
