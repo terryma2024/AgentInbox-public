@@ -1,0 +1,22 @@
+[Unit]
+Description=AgentInbox authenticated decision relay
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentinbox
+Group=agentinbox
+ExecStart=/opt/agentinbox/releases/0.1.0/agentinbox relay --config /etc/agentinbox/relay.local.json
+WorkingDirectory=/var/lib/agentinbox
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/agentinbox
+
+[Install]
+WantedBy=multi-user.target

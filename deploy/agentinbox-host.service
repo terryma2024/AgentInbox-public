@@ -1,0 +1,17 @@
+# Ubuntu user service: ~/.config/systemd/user/agentinbox-host.service
+[Unit]
+Description=AgentInbox per-user native Agent bridge
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/absolute/path/releases/0.1.0/agentinbox host /absolute/private/path/host.local.json
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+# Upgrade policy requires hostctl drain/status and no active requests before stopping.
+# Do not run this user bridge as the isolated relay service user.
+
+[Install]
+WantedBy=default.target

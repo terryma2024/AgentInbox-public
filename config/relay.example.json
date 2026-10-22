@@ -1,0 +1,10 @@
+{
+  "listen": "127.0.0.1:8787",
+  "database": "/absolute/private/path/inbox.sqlite",
+  "credentials": [
+    {"id": "iphone-owner", "token": "REPLACE_LOCALLY_DEVICE_SECRET", "role": "device", "revoked": false},
+    {"id": "host-mac", "token": "REPLACE_LOCALLY_HOST_SECRET", "role": "host", "hostId": "mac-mini", "revoked": false},
+    {"id": "host-ubuntu", "token": "REPLACE_LOCALLY_OTHER_HOST_SECRET", "role": "host", "hostId": "ubuntu", "revoked": false}
+  ],
+  "apns": null
+}

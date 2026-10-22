@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>dev.agentinbox.relay</string>
+<key>ProgramArguments</key><array>
+<string>/absolute/path/releases/0.1.0/agentinbox</string><string>relay</string><string>--config</string><string>/absolute/private/path/relay.local.json</string>
+</array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>10</integer>
+<key>Umask</key><integer>63</integer>
+<key>StandardOutPath</key><string>/absolute/private/path/relay.log</string>
+<key>StandardErrorPath</key><string>/absolute/private/path/relay.error.log</string>
+</dict></plist>

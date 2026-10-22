@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>aps-environment</key>
+	<string>$(AGENTINBOX_APNS_ENTITLEMENT)</string>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(AGENTINBOX_APP_GROUP)</string>
+	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AGENTINBOX_KEYCHAIN_GROUP)</string>
+	</array>
+</dict>
+</plist>

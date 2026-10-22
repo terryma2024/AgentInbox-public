@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>dev.agentinbox.host</string>
+<key>ProgramArguments</key><array><string>/absolute/path/releases/0.1.0/agentinbox</string><string>host</string><string>/absolute/private/path/host.local.json</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>ThrottleInterval</key><integer>10</integer><key>Umask</key><integer>63</integer>
+<key>StandardOutPath</key><string>/absolute/private/path/host.log</string>
+<key>StandardErrorPath</key><string>/absolute/private/path/host.error.log</string>
+</dict></plist>

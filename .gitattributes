@@ -1,0 +1,2 @@
+# Preserve raw compiler, test and device evidence exactly as emitted.
+evidence/** -whitespace

@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion|Bash|Read|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/agentinbox hook /absolute/private/state/ipc/hook.sock 60",
+            "timeout": 65
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "Bash|Read|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/agentinbox hook /absolute/private/state/ipc/hook.sock 60",
+            "timeout": 65
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "hostId": "replace-with-unique-machine-id",
+  "relayUrl": "http://127.0.0.1:8787",
+  "tokenFile": "/absolute/private/host-key",
+  "stateDir": "/absolute/private/agentinbox-host-state",
+  "ipcSocket": "/absolute/private/agentinbox-host-state/ipc/hook.sock",
+  "codexSocket": "/absolute/current/codex/app-server-control.sock",
+  "daemonPid": null,
+  "scopes": [
+    "/absolute/explicitly-authorized-project"
+  ],
+  "threadIds": [],
+  "requestTtl": 600,
+  "adoptionMarker": null,
+  "captureLoadedNative": true,
+  "daemonPeerPid": null,
+  "excludedSessionIds": [],
+  "captureAllDirectories": false
+}

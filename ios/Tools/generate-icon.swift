@@ -1,0 +1,10 @@
+import AppKit
+// 自有几何收件箱标识；仅构建工具，App 不依赖此脚本。
+let destination = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "ios/App/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+let c = CGContext(data: nil, width: 1024, height: 1024, bitsPerComponent: 8, bytesPerRow: 4096, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+let paper = CGColor(red: 0.94, green: 0.93, blue: 0.89, alpha: 1), ink = CGColor(red: 0.08, green: 0.28, blue: 0.25, alpha: 1)
+c.setFillColor(paper); c.fill(CGRect(x: 0,y: 0,width: 1024,height: 1024)); c.setFillColor(ink)
+let tray = CGMutablePath(); tray.move(to: CGPoint(x: 214,y: 363)); tray.addLine(to: CGPoint(x: 291,y: 538)); tray.addCurve(to: CGPoint(x: 340,y: 568), control1: CGPoint(x: 305,y: 564), control2: CGPoint(x: 320,y: 568)); tray.addLine(to: CGPoint(x: 684,y: 568)); tray.addCurve(to: CGPoint(x: 733,y: 538), control1: CGPoint(x: 704,y: 568), control2: CGPoint(x: 719,y: 564)); tray.addLine(to: CGPoint(x: 810,y: 363)); tray.addLine(to: CGPoint(x: 810,y: 300)); tray.addCurve(to: CGPoint(x: 754,y: 244), control1: CGPoint(x: 810,y: 269), control2: CGPoint(x: 785,y: 244)); tray.addLine(to: CGPoint(x: 270,y: 244)); tray.addCurve(to: CGPoint(x: 214,y: 300), control1: CGPoint(x: 239,y: 244), control2: CGPoint(x: 214,y: 269)); tray.closeSubpath(); c.addPath(tray); c.fillPath()
+c.setStrokeColor(paper); c.setLineWidth(40); c.setLineCap(.round); c.move(to: CGPoint(x: 253,y: 368)); c.addLine(to: CGPoint(x: 403,y: 368)); c.addCurve(to: CGPoint(x: 621,y: 368), control1: CGPoint(x: 437,y: 293), control2: CGPoint(x: 587,y: 293)); c.addLine(to: CGPoint(x: 771,y: 368)); c.strokePath()
+c.setStrokeColor(ink); c.setLineWidth(43); c.setLineCap(.round); c.setLineJoin(.round); c.move(to: CGPoint(x: 512,y: 782)); c.addLine(to: CGPoint(x: 512,y: 598)); c.move(to: CGPoint(x: 444,y: 658)); c.addLine(to: CGPoint(x: 512,y: 589)); c.addLine(to: CGPoint(x: 580,y: 658)); c.strokePath()
+try NSBitmapImageRep(cgImage: c.makeImage()!).representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: destination))

@@ -1,0 +1,40 @@
+/target/
+/ios/build/
+/ios/.build/
+/ios/DerivedData/
+
+# Local investigation records, screenshots, logs and runtime state.
+/evidence/
+
+*.sqlite*
+*.db*
+*.p8
+*.mobileprovision
+*.xcuserstate
+xcuserdata/
+/config/*.local.json
+/deploy/*.local.*
+.DS_Store
+
+# Developer Python inspection helpers only.
+**/__pycache__/
+
+# Private execution ledger and verification logs.
+/.superpowers/
+
+# Publication hygiene: installation secrets and generated artifacts stay local.
+/dist/
+/.publication-private/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa
+id_ed25519
+AuthKey_*
+*.local.xcconfig
+/config/*pairing*.json
