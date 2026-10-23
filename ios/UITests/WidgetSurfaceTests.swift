@@ -2,6 +2,97 @@ import XCTest
 
 @MainActor
 final class WidgetSurfaceTests: XCTestCase {
+    func testFixtureWidgetDoubleTapNextQuestionAndExactTextRoute() async throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["AGENTINBOX_WIDGET_EXPERIENCE_FIXTURE"] == "1", let file = env["AGENTINBOX_WIDGET_PROBE_CONFIG_FILE"] else { throw XCTSkip("仅隔离模拟器的合成 Widget 体验验收") }
+        let probe = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: file))) as? [String: Any])
+        let origin = try XCTUnwrap(probe["serverURL"] as? String)
+        let base = try XCTUnwrap(URL(string: origin))
+        XCTAssertEqual(base.host, "127.0.0.1")
+        guard base.host == "127.0.0.1", let keyFile = probe["tokenFile"] as? String,
+              try String(contentsOfFile: keyFile, encoding: .utf8) == "public-widget-fixture-only-never-provision" else { XCTFail("仅允许公开合成 fixture，不能操作真实任务"); return }
+        func control(_ path: String, post: Bool = false) async throws -> [String: Any] {
+            var request = URLRequest(url: try XCTUnwrap(URL(string: path, relativeTo: base)))
+            if post { request.httpMethod = "POST"; request.httpBody = Data("{}".utf8) }
+            let (data, response) = try await URLSession.shared.data(for: request)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        func shot(_ name: String, _ app: XCUIApplication) {
+            let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        _ = try await control("/fixture/reset", post: true)
+        let initial = try await control("/fixture/state")
+        let requests = try XCTUnwrap(initial["requests"] as? [[String: Any]])
+        let ids = try requests.map { try XCTUnwrap($0["requestId"] as? String) }
+        let app = XCUIApplication(); app.launchEnvironment["AGENTINBOX_WIDGET_PROBE_CONFIG_FILE"] = file; app.launch()
+        if app.alerts.buttons["稍后"].waitForExistence(timeout: 2) { app.alerts.buttons["稍后"].tap() }
+        XCTAssertTrue(app.buttons["request.\(ids[0])"].waitForExistence(timeout: 12))
+        XCUIDevice.shared.press(.home)
+        let home = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // Add medium Widget on a clean dedicated simulator, or reuse its existing one.
+        if !home.buttons["widget.refresh"].waitForExistence(timeout: 3) {
+            let icon = home.icons["Agent 收件箱"]
+            XCTAssertTrue(icon.waitForExistence(timeout: 5)); icon.press(forDuration: 1.5)
+            let medium = home.buttons["中尺寸小组件"]
+            XCTAssertTrue(medium.waitForExistence(timeout: 5)); medium.tap()
+        }
+        let refresh = home.buttons["widget.refresh"]
+        XCTAssertTrue(refresh.waitForExistence(timeout: 15)); refresh.tap()
+        if let family = env["AGENTINBOX_WIDGET_FIXTURE_FAMILY"], ["small", "large"].contains(family) {
+            let title = home.staticTexts["第一题"]
+            XCTAssertTrue(title.waitForExistence(timeout: 10)); title.press(forDuration: 1.5)
+            let size = home.buttons[family == "small" ? "小型小组件" : "大尺寸小组件"]
+            XCTAssertTrue(size.waitForExistence(timeout: 5)); size.tap()
+            XCTAssertTrue(refresh.waitForExistence(timeout: 10)); refresh.tap()
+        }
+        let initialArm = home.buttons["widget.arm.\(ids[0])"]
+        if initialArm.waitForExistence(timeout: 2) { initialArm.tap() }
+        let first = home.buttons["widget.option.\(ids[0]).1.beta"]
+        XCTAssertTrue(first.waitForExistence(timeout: 15))
+        let oldFrame = first.frame
+        shot("widget-first-pending-count-wait-sync", home)
+        first.doubleTap()
+        XCTAssertNotEqual(app.state, .runningForeground)
+        let sending = home.staticTexts["widget.sendingStatus"]
+        XCTAssertTrue(sending.waitForExistence(timeout: 3), "主屏必须有清楚可辨的发送中反馈")
+        shot("widget-sending", home)
+        let nextArm = home.buttons["widget.arm.\(ids[1])"]
+        XCTAssertTrue(nextArm.waitForExistence(timeout: 20))
+        XCTAssertFalse(home.buttons["widget.option.\(ids[1]).1.beta"].exists)
+        XCTAssertLessThan(nextArm.frame.maxY, oldFrame.minY, "展开入口必须离开旧答案的点击区域")
+        shot("widget-next-collapsed", home)
+        var status = try await control("/fixture/state")
+        XCTAssertEqual((status["posts"] as? [Any])?.count, 1)
+        // Repeated taps at the former answer coordinate cannot answer the next item.
+        home.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: oldFrame.midX, dy: oldFrame.midY)).doubleTap()
+        status = try await control("/fixture/state")
+        XCTAssertEqual((status["posts"] as? [Any])?.count, 1)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(nextArm.waitForExistence(timeout: 8))
+        nextArm.tap()
+        let second = home.buttons["widget.option.\(ids[1]).1.alpha"]
+        XCTAssertTrue(second.waitForExistence(timeout: 15)); second.tap()
+        let textLink = home.descendants(matching: .any).matching(identifier: "widget.open.\(ids[2])").firstMatch
+        XCTAssertTrue(textLink.waitForExistence(timeout: 20))
+        shot("widget-text-exact-request", home)
+        textLink.tap()
+        XCTAssertTrue(app.navigationBars["请求详情"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["文字原题"].exists)
+        XCTAssertFalse(app.staticTexts["第一题"].exists)
+        status = try await control("/fixture/state")
+        let posts = try XCTUnwrap(status["posts"] as? [[String: Any]])
+        XCTAssertEqual(posts.count, 2)
+        XCTAssertEqual(posts.map { $0["requestId"] as? String }, Array(ids.prefix(2)))
+        XCTAssertEqual(posts[0]["optionIds"] as? [String], ["beta"])
+        XCTAssertEqual(posts[1]["optionIds"] as? [String], ["alpha"])
+        _ = try await control("/fixture/offline", post: true)
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(refresh.waitForExistence(timeout: 8)); refresh.tap()
+        XCTAssertTrue(home.staticTexts["连接暂不可用，请稍后刷新"].waitForExistence(timeout: 15))
+        shot("widget-sync-failed-preserves-last-success", home)
+    }
+
     func testSimulatorWidgetGalleryDiscovery() throws {
         guard ProcessInfo.processInfo.environment["AGENTINBOX_WIDGET_SURFACE_TEST"] == "1" else { throw XCTSkip("仅显式启用模拟器 Widget 主屏幕测试") }
         let app = XCUIApplication()

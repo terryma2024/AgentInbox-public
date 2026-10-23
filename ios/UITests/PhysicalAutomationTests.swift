@@ -26,6 +26,96 @@ final class PhysicalAutomationTests: XCTestCase {
         return false
     }
 
+    func testWidgetExperienceOnPhysicalPhone() throws {
+        try requirePhysicalAuthorization()
+        let env = ProcessInfo.processInfo.environment
+        guard env["AGENTINBOX_WIDGET_EXPERIENCE_ACCEPTANCE"] == "1",
+              let data = env["AGENTINBOX_PHYSICAL_BINDING_JSON"]?.data(using: .utf8),
+              let envelope = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let requests = envelope["requests"] as? [[String: Any]], requests.count == 3 else {
+            throw XCTSkip("需要三道独立无副作用验收题的精确绑定")
+        }
+        var ids: [String] = []
+        for (index, request) in requests.enumerated() {
+            guard let id = request["requestId"] as? String, UUID(uuidString: id) != nil,
+                  request["state"] as? String == "pending", request["revision"] as? Int == 1,
+                  (request["expiresAt"] as? Double ?? 0) > Date().timeIntervalSince1970,
+                  request["engine"] as? String == "codex",
+                  (request["body"] as? String)?.hasPrefix(["WIDGET_ACCEPT_A", "WIDGET_ACCEPT_B", "WIDGET_ACCEPT_DETAIL"][index]) == true,
+                  let native = request["native"] as? [String: Any], let callback = native["callback"] as? [String: Any],
+                  callback["method"] as? String == "item/tool/requestUserInput",
+                  let params = callback["params"] as? [String: Any], let questions = params["questions"] as? [[String: Any]], questions.count == 1,
+                  questions[0]["question"] as? String == request["body"] as? String,
+                  request["sessionId"] as? String == params["threadId"] as? String,
+                  request["turnId"] as? String == params["turnId"] as? String,
+                  request["itemId"] as? String == params["itemId"] as? String else {
+                XCTFail("仅允许明确绑定的原生问答，不操作其他任务"); return
+            }
+            let options = request["options"] as? [[String: Any]] ?? []
+            guard options.map({ $0["id"] as? String }) == ["q0-o0", "q0-o1"],
+                  options.map({ $0["label"] as? String }) == ["Alpha", "Beta"] else { XCTFail("验收选项映射不匹配"); return }
+            ids.append(id)
+        }
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(app.buttons["request.\(ids[0])"].waitForExistence(timeout: 30))
+        app.terminate(); XCTAssertEqual(app.state, .notRunning)
+        let home = XCUIApplication(bundleIdentifier: "com.apple.springboard"); home.activate(); home.swipeRight()
+        let first = home.buttons["widget.option.\(ids[0]).1.q0-o1"]
+        let firstArm = home.buttons["widget.arm.\(ids[0])"]
+        for page in 0..<7 {
+            let refresh = home.buttons["widget.refresh"].firstMatch
+            if refresh.exists && refresh.isHittable { refresh.tap(); _ = first.waitForExistence(timeout: 3) }
+            if firstArm.exists { firstArm.tap() }
+            if first.waitForExistence(timeout: 3) { break }
+            if page < 6 { home.swipeLeft() }
+        }
+        guard first.exists, first.isHittable else { XCTFail("主屏未显示绑定的第一道验收题，禁止替代点击"); return }
+        func shot(_ name: String) {
+            let item = XCTAttachment(screenshot: home.screenshot()); item.name = name; item.lifetime = .keepAlways; add(item)
+        }
+        shot("physical-widget-first-count-wait-sync")
+        let oldFrame = first.frame
+        first.doubleTap()
+        XCTAssertNotEqual(app.state, .runningForeground, "直接回答不能打开 App")
+        let status = home.staticTexts["widget.sendingStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 8), "必须可辨认发送或等待回执状态")
+        let sendingObserved = status.label.contains("正在发送")
+        XCTAssertTrue(sendingObserved || status.label.contains("待回执") || status.label.contains("已接收"))
+        shot("physical-widget-sending-or-receipt")
+        print("AGENTINBOX_PHYSICAL_WIDGET_FIRST_SUBMITTED")
+        let nextArm = home.buttons["widget.arm.\(ids[1])"]
+        XCTAssertTrue(nextArm.waitForExistence(timeout: 25))
+        XCTAssertFalse(home.buttons["widget.option.\(ids[1]).1.q0-o0"].exists)
+        XCTAssertLessThan(nextArm.frame.maxY, oldFrame.minY)
+        shot("physical-widget-next-collapsed")
+        home.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: oldFrame.midX, dy: oldFrame.midY)).doubleTap()
+        if app.state == .runningForeground { app.terminate(); home.activate() }
+        print("AGENTINBOX_PHYSICAL_WIDGET_OLD_POSITION_TAPPED")
+        // Observation window only: this delay is not proof. An independent
+        // verifier must confirm no second response before claiming that result.
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertTrue(nextArm.waitForExistence(timeout: 8))
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == YES"), object: nextArm)], timeout: 20), .completed)
+        nextArm.tap()
+        let second = home.buttons["widget.option.\(ids[1]).1.q0-o0"]
+        XCTAssertTrue(second.waitForExistence(timeout: 15)); second.tap()
+        XCTAssertNotEqual(app.state, .runningForeground)
+        let detail = home.descendants(matching: .any).matching(identifier: "widget.open.\(ids[2])").firstMatch
+        XCTAssertTrue(detail.waitForExistence(timeout: 25)); shot("physical-widget-detail-entry"); detail.tap()
+        XCTAssertTrue(app.navigationBars["请求详情"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts[requests[2]["body"] as! String].exists, "详情必须显示第三道原题")
+        let field = app.textFields["reply-text.route"]
+        for _ in 0..<12 where !field.isHittable { app.swipeUp() }
+        XCTAssertTrue(field.isHittable, "复杂问题必须能在准确原题输入文字")
+        let proof: [String: Any] = ["physicalPhone": true, "uiOnly": true,
+            "requiresIndependentReplyVerification": true, "firstDoubleTap": true,
+            "inFlightSendingTextObserved": sendingObserved, "receiptStatusVisible": true,
+            "nextQuestionCollapsed": true, "unlockOutsideOldAnswerArea": true, "exactTextDetail": true]
+        let item = XCTAttachment(data: try JSONSerialization.data(withJSONObject: proof), uniformTypeIdentifier: "public.json")
+        item.name = "physical-widget-experience-proof"; item.lifetime = .keepAlways; add(item)
+        print("AGENTINBOX_PHYSICAL_WIDGET_EXPERIENCE_ACCEPTED")
+    }
+
     func testDecisionContextOriginalOnPhysicalPhone() throws {
         try requirePhysicalAuthorization()
         let env = ProcessInfo.processInfo.environment
