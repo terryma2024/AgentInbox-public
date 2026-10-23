@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Mutex};
 pub struct Store {
-    db: Mutex<Connection>,
+    pub(crate) db: Mutex<Connection>,
 }
 impl Store {
     pub fn open(path: impl AsRef<Path>) -> ApiResult<Self> {
@@ -22,6 +22,7 @@ impl Store {
             db.execute_batch("ALTER TABLE widget_tokens ADD COLUMN registration_revision INTEGER NOT NULL DEFAULT 0;")?;
         }
         reply_progress::install(&db)?;
+        crate::diagnostics::install(&db)?;
         {
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute("UPDATE requests SET state='unknown' WHERE state='submitting' AND id IN (SELECT request FROM responses WHERE claimed=1)",[])?;
@@ -92,13 +93,26 @@ impl Store {
             }
             return Err(error(409, "native binding or requestId already exists"));
         }
+        let diagnostic_device: Option<String> = if let Some(test) = v["diagnosticTestId"].as_str() {
+            let owner: Option<String> = tx.query_row("SELECT device FROM diagnostic_tests WHERE id=?1 AND host=?2 AND phase='starting' AND expires>=?3 AND request IS NULL",params![test,host,exp],|r|r.get(0)).optional()?;
+            if owner.is_none() {
+                return Err(error(409, "diagnostic binding unavailable"));
+            }
+            tx.execute(
+                "UPDATE diagnostic_tests SET request=?1,phase='ready' WHERE id=?2",
+                params![id, test],
+            )?;
+            owner
+        } else {
+            None
+        };
         tx.execute(
             "INSERT INTO requests VALUES(?1,?2,?3,'pending',?4,?5)",
             params![id, host, binding, exp, v.to_string()],
         )?;
         tx.execute(
-            "INSERT INTO outbox(request,device) SELECT ?1,id FROM devices WHERE active=1",
-            params![id],
+            "INSERT INTO outbox(request,device) SELECT ?1,id FROM devices WHERE active=1 AND (?2 IS NULL OR id=?2)",
+            params![id,diagnostic_device],
         )?;
         enqueue_widget_changes(&tx, time)?;
         tx.commit()?;
@@ -132,7 +146,7 @@ impl Store {
             tx.commit()?;
         }
         let mut stmt =
-            db.prepare("SELECT json,state,id FROM requests ORDER BY rowid DESC LIMIT 200")?;
+            db.prepare("SELECT json,state,id FROM requests WHERE json_extract(json,'$.diagnosticTestId') IS NULL ORDER BY rowid DESC LIMIT 200")?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -206,6 +220,7 @@ impl Store {
         let payload = a.to_string();
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
+        crate::diagnostics::authorize_request(&tx, &id, device)?;
         if let Some((old, owner)) = tx
             .query_row(
                 "SELECT json,device FROM responses WHERE id=?1",
@@ -395,7 +410,7 @@ impl Store {
         let mut db = self.db.lock().unwrap();
         let tx = db.transaction()?;
         tx.execute("INSERT INTO devices VALUES(?1,?2,?3,1) ON CONFLICT(id) DO UPDATE SET token=excluded.token,environment=excluded.environment,active=1",params![id,token,env])?;
-        tx.execute("INSERT OR IGNORE INTO outbox(request,device) SELECT id,?1 FROM requests WHERE state='pending' AND expires>?2",params![id,now()])?;
+        tx.execute("INSERT OR IGNORE INTO outbox(request,device) SELECT r.id,?1 FROM requests r WHERE r.state='pending' AND r.expires>?2 AND (json_extract(r.json,'$.diagnosticTestId') IS NULL OR EXISTS(SELECT 1 FROM diagnostic_tests t WHERE t.request=r.id AND t.device=?1))",params![id,now()])?;
         tx.commit()?;
         Ok(json!({"registered":true}))
     }
@@ -496,8 +511,8 @@ impl Store {
     }
     pub fn push_batch(&self, time: i64) -> ApiResult<Vec<Value>> {
         let db = self.db.lock().unwrap();
-        let mut stmt=db.prepare("SELECT o.id,o.request,d.token,d.environment,o.attempts,r.expires FROM outbox o JOIN devices d ON d.id=o.device JOIN requests r ON r.id=o.request WHERE o.state='pending' AND o.next<=?1 AND d.active=1 AND r.state='pending' AND r.expires>?1 LIMIT 20")?;
-        let rows=stmt.query_map([time],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"requestId":r.get::<_,String>(1)?,"token":r.get::<_,String>(2)?,"environment":r.get::<_,String>(3)?,"attempts":r.get::<_,i64>(4)?,"expiresAt":r.get::<_,i64>(5)?})))?;
+        let mut stmt=db.prepare("SELECT o.id,o.request,d.token,d.environment,o.attempts,r.expires,json_extract(r.json,'$.diagnosticTestId') FROM outbox o JOIN devices d ON d.id=o.device JOIN requests r ON r.id=o.request WHERE o.state='pending' AND o.next<=?1 AND d.active=1 AND r.state='pending' AND r.expires>?1 LIMIT 20")?;
+        let rows=stmt.query_map([time],|r|Ok(json!({"id":r.get::<_,i64>(0)?,"requestId":r.get::<_,String>(1)?,"token":r.get::<_,String>(2)?,"environment":r.get::<_,String>(3)?,"attempts":r.get::<_,i64>(4)?,"expiresAt":r.get::<_,i64>(5)?,"diagnosticTestId":r.get::<_,Option<String>>(6)?})))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
     /// Reauthorize a previously fetched job immediately before starting HTTP.
@@ -841,7 +856,7 @@ fn widget_job_current(db: &Connection, j: &WidgetJob, time: i64) -> ApiResult<bo
     Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM widget_tokens t JOIN widget_updates u ON u.device=t.device WHERE t.device=?1 AND t.token=?2 AND t.environment=?3 AND t.version=?4 AND t.active=1 AND t.blocked_reason IS NULL AND u.state='pending' AND u.generation>=?5 AND u.acked<?5 AND u.next<=?6 AND u.attempts<?7 AND u.attempts=?8 AND NOT EXISTS(SELECT 1 FROM revoked_credentials r WHERE r.id=t.device) AND NOT EXISTS(SELECT 1 FROM device_credentials c WHERE c.id=t.device AND c.revoked<>0))",params![j.device_id,j.token,j.environment,j.token_version,j.generation,time,MAX_WIDGET_ATTEMPTS,j.attempts],|r|r.get(0))?)
 }
 fn widget_snapshot(tx: &Transaction<'_>) -> ApiResult<String> {
-    let mut query = tx.prepare("SELECT id,state,expires FROM requests ORDER BY id")?;
+    let mut query = tx.prepare("SELECT id,state,expires FROM requests WHERE json_extract(json,'$.diagnosticTestId') IS NULL ORDER BY id")?;
     let rows = query.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,

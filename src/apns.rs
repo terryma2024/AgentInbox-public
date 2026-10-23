@@ -138,11 +138,23 @@ pub fn worker(store: Arc<Store>, c: Config, config_path: PathBuf) {
 }
 
 fn notification_payload(p: &Value) -> Value {
-    json!({"aps":{"alert":{"title":"Agent 决策收件箱","body":"有一项任务等待你的回复"},"sound":"default"},"requestId":p["requestId"]})
+    let mut payload = json!({"aps":{"alert":{"title":"Agent 决策收件箱","body":"有一项任务等待你的回复"},"sound":"default"},"requestId":p["requestId"]});
+    if let Some(test) = p["diagnosticTestId"].as_str() {
+        payload["diagnosticTestId"] = json!(test);
+    }
+    payload
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_push_has_exact_test_route_without_contents() {
+        let payload = notification_payload(
+            &json!({"requestId":"fixture-request","diagnosticTestId":"fixture-test","body":"fixture-sensitive-text"}),
+        );
+        assert_eq!(payload["diagnosticTestId"], "fixture-test");
+        assert!(!payload.to_string().contains("fixture-sensitive-text"));
+    }
     #[test]
     fn payload_does_not_include_request_contents() {
         let p = json!({"requestId":"opaque","body":"secret-question","options":["password"],"native":"callback","token":"private-device-token"});

@@ -383,3 +383,55 @@ fn upgrade_status_is_host_bound_and_includes_unknown_without_question_contents()
         0
     );
 }
+
+#[test]
+fn diagnostics_http_enforces_roles_device_ownership_and_separate_push_probe() {
+    let r = Relay::new();
+    let now = agentinbox::model::now();
+    r.call(HOST_A,"/v1/host/heartbeat",Some(json!({"diagnostics":{"codex":"disabled","claude":"unobserved","reconciled":true,"draining":false}})));
+    assert_eq!(
+        r.call(DEVICE, "/v1/diagnostics", None).1["hosts"][0]["observation"]["codex"],
+        "disabled"
+    );
+    assert_ne!(r.call(HOST_A, "/v1/diagnostics", None).0, 200);
+    assert_eq!(r.call(DEVICE, "/v1/host/diagnostics/next", None).0, 403);
+    assert_eq!(
+        r.call(
+            DEVICE,
+            "/v1/diagnostics/tests",
+            Some(json!({"testId":"fixture-http-push","hostId":"a","mode":"push"}))
+        )
+        .0,
+        200
+    );
+    assert!(
+        r.call(DEVICE, "/v1/requests", None).1["requests"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let status = r
+        .call(DEVICE, "/v1/diagnostics/tests/fixture-http-push", None)
+        .1;
+    assert_eq!(status["received"], false);
+    assert_eq!(status["expiresAt"].as_i64().unwrap() >= now + 180, true);
+    let q = status["request"]["requestId"].as_str().unwrap();
+    r.call(
+        DEVICE,
+        "/v1/diagnostics/tests",
+        Some(json!({"testId":"fixture-http-reply","hostId":"a"})),
+    );
+    assert_eq!(
+        r.call(HOST_A, "/v1/host/diagnostics/next", None).1["test"]["testId"],
+        "fixture-http-reply"
+    );
+    assert!(r.call(HOST_A, "/v1/host/diagnostics/next", None).1["test"].is_null());
+    assert_eq!(r.call(HOST_B,"/v1/host/diagnostics/result",Some(json!({"testId":"fixture-http-reply","phase":"unsupported","code":"nativeUnavailable"}))).0,409);
+    assert_eq!(r.call(HOST_A,"/v1/host/diagnostics/result",Some(json!({"testId":"fixture-http-reply","phase":"unsupported","code":"nativeUnavailable"}))).0,200);
+    assert_eq!(r.call(DEVICE, &format!("/v1/requests/{q}"), None).0, 200);
+    assert_eq!(
+        r.call("invalid-diagnostic-fixture", "/v1/diagnostics", None)
+            .0,
+        401
+    );
+}

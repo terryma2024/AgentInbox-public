@@ -92,6 +92,10 @@ fn codex_mock_daemon() {
                 send(&mut ws, callback("old-outside"));
                 send(&mut ws, callback("unlisted-old"));
             }
+            Some("thread/loaded/list") if root.join("loaded-error").exists() => send(
+                &mut ws,
+                json!({"id":message["id"],"error":{"code":-1,"message":"fixture loaded scan failure"}}),
+            ),
             Some("thread/loaded/list") => send(
                 &mut ws,
                 json!({"id":message["id"],"result":{"data":["old-scoped","old-outside","new-scoped","new-child","new-outside","not-waiting"],"nextCursor":null}}),
@@ -153,6 +157,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new(all: Option<bool>) -> Self {
+        Self::with_loaded_error(all, false)
+    }
+    fn with_loaded_error(all: Option<bool>, loaded_error: bool) -> Self {
         let root = PathBuf::from("/tmp").join(format!(
             "ainb-cdx-{}",
             &uuid::Uuid::new_v4().to_string()[..8]
@@ -169,6 +176,9 @@ impl Fixture {
         };
         fs::create_dir_all(fixture.root.join("scope/child")).unwrap();
         fs::create_dir(fixture.root.join("outside")).unwrap();
+        if loaded_error {
+            fs::write(fixture.root.join("loaded-error"), b"fixture").unwrap();
+        }
         let executable = fixture.root.join("app-server--managed-daemon");
         symlink(std::env::current_exe().unwrap(), &executable).unwrap();
         let daemon_log = fs::File::create(fixture.root.join("daemon.log")).unwrap();
@@ -185,6 +195,7 @@ impl Fixture {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let writes = fixture.published.clone();
+        let heartbeat_file = fixture.root.join("diagnostic-heartbeats.jsonl");
         let stop = fixture.stop.clone();
         fixture.relay = Some(thread::spawn(move || {
             while !stop.load(Ordering::SeqCst) {
@@ -195,6 +206,15 @@ impl Fixture {
                         let value: Value = serde_json::from_reader(request.as_reader()).unwrap();
                         writes.lock().unwrap().push(value.clone());
                         value
+                    } else if request.url() == "/v1/host/heartbeat" {
+                        let value: Value = serde_json::from_reader(request.as_reader()).unwrap();
+                        let mut out = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&heartbeat_file)
+                            .unwrap();
+                        writeln!(out, "{}", value["diagnostics"]).unwrap();
+                        json!({})
                     } else if request.url() == "/v1/capabilities" {
                         json!({"replyProgressVersion":1,"bindingDigestVersion":1})
                     } else if request.url().starts_with("/v1/host/reply-progress") {
@@ -243,12 +263,12 @@ impl Fixture {
         fixture.wait_for("paginated native discovery and scoped publication", |f| {
             f.rpc().iter().any(|m| {
                 m["method"] == "thread/list" && m["params"]["cursor"] == "fixture-page-two"
-            }) && f
-                .published
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|r| r["sessionId"] == "new-scoped")
+            }) && (loaded_error
+                || f.published
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r["sessionId"] == "new-scoped"))
         });
         fixture
     }
@@ -260,7 +280,7 @@ impl Fixture {
             .collect()
     }
     fn wait_for(&mut self, label: &str, condition: impl Fn(&Self) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(6);
+        let deadline = Instant::now() + Duration::from_secs(12);
         while !condition(self) {
             let daemon_pid = self.daemon.as_ref().unwrap().id().to_string();
             for (name, child) in [("host", &mut self.host), ("daemon", &mut self.daemon)] {
@@ -391,4 +411,23 @@ fn omitted_or_false_all_directories_keeps_exact_scopes_on_every_page() {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["sessionId"], "new-scoped");
     }
+}
+
+#[test]
+fn failed_loaded_thread_discovery_cannot_report_successful_capture() {
+    let mut f = Fixture::with_loaded_error(Some(true), true);
+    f.wait_for("second diagnostic heartbeat", |f| {
+        fs::read_to_string(f.root.join("diagnostic-heartbeats.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+            >= 2
+    });
+    let text = fs::read_to_string(f.root.join("diagnostic-heartbeats.jsonl")).unwrap();
+    let observation: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert!(
+        observation["scanAt"].is_null(),
+        "Successful thread/list cannot mask failed loaded-thread discovery"
+    );
+    assert!(f.published.lock().unwrap().is_empty());
 }

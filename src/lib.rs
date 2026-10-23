@@ -2,6 +2,8 @@ pub mod adapters;
 pub mod apns;
 pub mod client;
 pub mod device_admin;
+pub mod diagnostic_native;
+pub mod diagnostics;
 pub mod discovery;
 pub mod hook;
 pub mod host;

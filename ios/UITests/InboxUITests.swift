@@ -5,6 +5,40 @@ final class InboxUITests: XCTestCase {
         for _ in 0..<10 where !element.isHittable { if upward { app.swipeUp() } else { app.swipeDown() } }
         XCTAssertTrue(element.isHittable)
     }
+    @MainActor func testDiagnosticNativeLoopAndSafeShareEntry() throws {
+        guard let config = ProcessInfo.processInfo.environment["AGENTINBOX_DIAGNOSTICS_UI_CONFIG"] else { throw XCTSkip("仅隔离原生诊断 fixture") }
+        let probe = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: config))) as? [String: Any])
+        let origin = try XCTUnwrap(probe["serverURL"] as? String)
+        let tokenFile = try XCTUnwrap(probe["tokenFile"] as? String)
+        guard URL(string: origin)?.host == "127.0.0.1", try String(contentsOfFile: tokenFile, encoding: .utf8) == "public-diagnostic-device-fixture-0001" else { XCTFail("仅允许本地人工 fixture"); return }
+        let app = XCUIApplication(); app.launchArguments = ["--demo"]; app.launchEnvironment["AGENTINBOX_WIDGET_PROBE_CONFIG_FILE"] = config; app.launch()
+        app.tabBars.buttons["设置"].tap()
+        let entry = app.buttons["open-diagnostics"]; reveal(entry, in: app); entry.tap()
+        XCTAssertTrue(app.navigationBars["自检与诊断"].waitForExistence(timeout: 5))
+        app.buttons["diagnostics-run"].tap()
+        let host = app.staticTexts["diagnostic-state.1.host"]
+        XCTAssertTrue(host.waitForExistence(timeout: 10)); XCTAssertEqual(host.label, "通过")
+        let native = app.buttons["测试原调用回复闭环"]; reveal(native, in: app); native.tap()
+        let answer = app.buttons["diagnostic-answer.q0-o0"]
+        for _ in 0..<20 where !answer.exists { app.swipeUp(); Thread.sleep(forTimeInterval: 1) }
+        XCTAssertTrue(answer.waitForExistence(timeout: 15)); reveal(answer, in: app)
+        let received = app.staticTexts["diagnostic-state.1.received"]
+        XCTAssertEqual(received.label, "未确认")
+        let pending = XCTAttachment(screenshot: app.screenshot()); pending.name = "diagnostic-original-unconfirmed"; pending.lifetime = .keepAlways; add(pending)
+        answer.tap()
+        let continued = app.staticTexts["diagnostic-state.1.continued"]
+        let passed = NSPredicate(format: "label == %@", "通过")
+        expectation(for: passed, evaluatedWith: continued)
+        waitForExpectations(timeout: 20)
+        XCTAssertEqual(received.label, "通过")
+        let push = app.staticTexts["diagnostic-state.1.push"]
+        XCTAssertNotEqual(push.label, "通过", "未配置 APNs 的 fixture 不能冒称推送到达")
+        let share = app.buttons["diagnostics-share"]; reveal(share, in: app)
+        XCTAssertTrue(share.exists)
+        let completed = XCTAttachment(screenshot: app.screenshot()); completed.name = "diagnostic-original-received-and-continued"; completed.lifetime = .keepAlways; add(completed)
+        app.terminate()
+    }
+
     func testDecisionContextAndLongOriginalTail() {
         let app = XCUIApplication(); app.launchArguments = ["--demo", "--demo-context"]; app.launch()
         let machine = app.staticTexts["decision-context.machine"]

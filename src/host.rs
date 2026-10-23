@@ -487,6 +487,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut loaded_collect = HashSet::new();
     let mut loaded_refresh = false;
     let mut queries: HashMap<u64, Option<PathBuf>> = HashMap::new();
+    let mut diagnostic: Option<crate::diagnostic_native::Probe> = None;
+    let mut scan_at: Option<i64> = None;
+    let mut hook_at: Option<i64> = None;
+    let mut scan_failed = false;
+    let mut scan_running = false;
     let mut heartbeat_at = Instant::now() - Duration::from_secs(11);
     let mut outbox_at = Instant::now();
     let mut rpc_id = 10u64;
@@ -504,8 +509,42 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 &c.relay_url,
                 &token,
                 "/v1/host/heartbeat",
-                &json!({"hostId":c.host_id,"runtimeId":runtime,"draining":drain_path.exists()}),
+                &json!({"hostId":c.host_id,"runtimeId":runtime,"draining":drain_path.exists(),"diagnostics":{"codex":if initialized {"ready"} else if ws.is_some(){"starting"} else {"disabled"},"claude":if hook_at.is_some() {"observed"} else {"unobserved"},"scanAt":scan_at,"hookAt":hook_at,"reconciled":startup_reconciled,"draining":drain_path.exists(),"nativeProof":native_source.as_ref().is_some_and(|s|crate::native_receipt::Source::connect(&s.directory,s.manifest.native_pid).is_ok())}}),
             );
+            if diagnostic.is_none() && (ws.is_none() || initialized) {
+                if let Ok(job) = client::get_json_bounded(
+                    &c.relay_url,
+                    &token,
+                    "/v1/host/diagnostics/next",
+                    Duration::from_secs(1),
+                ) {
+                    if let (Some(test), Some(expires)) = (
+                        job["test"]["testId"].as_str(),
+                        job["test"]["expiresAt"].as_i64(),
+                    ) {
+                        let blocked = if drain_path.exists() {
+                            Some(("failed", "hostDraining"))
+                        } else if !startup_reconciled {
+                            Some(("failed", "reconciliationPending"))
+                        } else if !initialized || native_source.is_none() {
+                            Some(("unsupported", "nativeUnavailable"))
+                        } else {
+                            None
+                        };
+                        if let Some((phase, code)) = blocked {
+                            diagnostic_result(&c, &token, test, phase, code);
+                        } else if let Ok(mut probe) =
+                            crate::diagnostic_native::Probe::start(&c.state_dir, test, expires)
+                        {
+                            rpc_id += 1;
+                            probe.start_rpc = rpc_id;
+                            if ws.as_mut().is_some_and(|w|send(w,json!({"id":rpc_id,"method":"thread/start","params":probe.thread_params()})).is_ok()) {diagnostic=Some(probe);}else{diagnostic_result(&c,&token,test,"failed","nativeStartFailed");}
+                        } else {
+                            diagnostic_result(&c, &token, test, "failed", "nativeStartFailed");
+                        }
+                    }
+                }
+            }
             heartbeat_at = Instant::now();
         }
         if outbox_at.elapsed() > Duration::from_secs(2) {
@@ -609,6 +648,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 );
                 continue;
             };
+            hook_at = Some(now());
             let observer_key = format!(
                 "{}:{}:{}",
                 engine_runtime, event["session_id"], event["prompt_id"]
@@ -697,9 +737,13 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 && list_at.elapsed() > Duration::from_secs(2)
                 && !drain_path.exists()
                 && !loaded_refresh
+                && queries.is_empty()
+                && !scan_running
             {
                 loaded_collect.clear();
                 loaded_refresh = true;
+                scan_failed = false;
+                scan_running = true;
                 send(
                     w,
                     json!({"id":2,"method":"thread/loaded/list","params":{"limit":100}}),
@@ -723,12 +767,45 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             match w.read() {
                 Ok(Message::Text(text)) => {
                     let m: Value = serde_json::from_str(&text)?;
+                    let mut diagnostic_failed = false;
+                    if let Some(probe) = diagnostic.as_mut() {
+                        if m["id"].as_u64() == Some(probe.start_rpc) {
+                            if let Some(tid) = m["result"]["thread"]["id"].as_str() {
+                                probe.thread = Some(tid.into());
+                                attached.insert(tid.into());
+                                if let Some(path) = m["result"]["thread"]["path"].as_str() {
+                                    rollouts.insert(tid.into(), path.into());
+                                }
+                                rpc_id += 1;
+                                probe.turn_rpc = Some(rpc_id);
+                                if send(w,json!({"id":rpc_id,"method":"turn/start","params":probe.turn_params()})).is_err(){diagnostic_failed=true;}
+                            } else {
+                                diagnostic_failed = true;
+                            }
+                        }
+                        if m["id"].as_u64() == probe.turn_rpc && m.get("error").is_some() {
+                            diagnostic_failed = true;
+                        }
+                    }
+                    if diagnostic_failed {
+                        if let Some(probe) = diagnostic.take() {
+                            diagnostic_result(
+                                &c,
+                                &token,
+                                &probe.test_id,
+                                "failed",
+                                "nativeStartFailed",
+                            );
+                            cleanup_diagnostic(w, &probe, &mut rpc_id, &mut attached);
+                        }
+                    }
                     if m["id"] == 1 && m.get("result").is_some() {
                         send(w, json!({"method":"initialized"}))?;
                         initialized = true;
                     }
                     if m["id"] == 2 && m.get("error").is_some() {
                         loaded_refresh = false;
+                        scan_failed = true;
                     }
                     if m["id"] == 2 && m.get("result").is_some() {
                         loaded_collect.extend(
@@ -755,6 +832,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         .filter(|_| m.get("result").is_some() || m.get("error").is_some())
                     {
                         if let Some(scope) = queries.remove(&id) {
+                            if m.get("error").is_some() {
+                                scan_failed = true;
+                            }
                             if let Some(cursor) = m["result"]["nextCursor"].as_str() {
                                 rpc_id += 1;
                                 queries.insert(rpc_id, scope.clone());
@@ -813,6 +893,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    if scan_running && !loaded_refresh && queries.is_empty() {
+                        scan_at = if scan_failed { None } else { Some(now()) };
+                        scan_running = false;
+                    }
                     if codex::is_callback(&m)
                         && m["params"]["threadId"]
                             .as_str()
@@ -857,6 +941,13 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                                 {
                                     request["projectPath"] = context["projectPath"].clone();
                                     request["sessionLabel"] = context["sessionLabel"].clone();
+                                }
+                                if let Some(probe) = diagnostic.as_mut().filter(|probe| {
+                                    probe.thread.as_deref() == m["params"]["threadId"].as_str()
+                                }) {
+                                    probe.callback_seen = true;
+                                    request["diagnosticTestId"] = json!(probe.test_id);
+                                    request["expiresAt"] = json!(probe.expires);
                                 }
                                 let published = publish(&c, &token, &request);
                                 if let Err(ref reason) = published {
@@ -983,6 +1074,22 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
         } else {
             thread::sleep(Duration::from_millis(50));
+        }
+        if diagnostic.as_ref().is_some_and(|probe| {
+            now() >= probe.expires
+                || (probe.callback_seen
+                    && !pending
+                        .values()
+                        .any(|p| p.request["diagnosticTestId"] == probe.test_id))
+        }) {
+            if let Some(probe) = diagnostic.take() {
+                if now() >= probe.expires {
+                    diagnostic_result(&c, &token, &probe.test_id, "failed", "nativeTimeout");
+                }
+                if let Some(w) = ws.as_mut() {
+                    cleanup_diagnostic(w, &probe, &mut rpc_id, &mut attached);
+                }
+            }
         }
         // A helper socket is an ephemeral callback, never a durable queue destination.
         let mut gone = Vec::new();
@@ -1891,5 +1998,30 @@ mod codex_rollout_provenance_tests {
         let fixture = Fixture::phone_beta();
         fixture.write_result("original-session", "original-turn", "other-call", "Beta");
         assert!(!codex_rollout_matches(&fixture.pending));
+    }
+}
+
+fn diagnostic_result(c: &Config, token: &str, test: &str, phase: &str, code: &str) {
+    let _ = client::post_json_bounded(
+        &c.relay_url,
+        token,
+        "/v1/host/diagnostics/result",
+        &json!({"testId":test,"phase":phase,"code":code}),
+        Duration::from_secs(1),
+    );
+}
+fn cleanup_diagnostic(
+    w: &mut WebSocket<UnixStream>,
+    probe: &crate::diagnostic_native::Probe,
+    rpc: &mut u64,
+    attached: &mut HashSet<String>,
+) {
+    if let Some(tid) = &probe.thread {
+        attached.remove(tid);
+        *rpc += 1;
+        let _ = send(
+            w,
+            json!({"id":*rpc,"method":"thread/archive","params":{"threadId":tid}}),
+        );
     }
 }

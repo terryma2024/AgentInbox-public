@@ -58,6 +58,10 @@
 		F4553C4B9FEC56A0201807A1 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1110DCAFAFC1BBD00A366779 /* ProtocolTests.swift */; };
 		F7F26AAEAB5A6075DCEB7D08 /* TailnetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8858283A1C76D6B78C2568C /* TailnetStoreTests.swift */; };
 		FE71ED351D0387666DF4C86C /* Storage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5494B545AC3D28E959DECE0E /* Storage.swift */; };
+		9334CDF673A807CEBDA62270 /* DiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8CCBAEEACAD0F609C6AEDEE /* DiagnosticsTests.swift */; };
+		7F8DB6BCC849AB7C28B75636 /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54275BE3BD9858FC14EBC2C9 /* Diagnostics.swift */; };
+		F049EB7D0D36ED8029CD2CB1 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C32DA5551C18B52D61AAF1D /* DiagnosticsView.swift */; };
+		05C15ABC98615E9E0B779A6B /* Diagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54275BE3BD9858FC14EBC2C9 /* Diagnostics.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -149,6 +153,9 @@
 		F6B4958522D3A8E7D0721FB2 /* SubmissionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubmissionTests.swift; sourceTree = "<group>"; };
 		F7158DBC0D50965C7A87C2C1 /* TailnetMachineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TailnetMachineView.swift; sourceTree = "<group>"; };
 		F81C94718B0CE980E1D0EB48 /* AgentInbox.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgentInbox.entitlements; sourceTree = "<group>"; };
+		C8CCBAEEACAD0F609C6AEDEE /* DiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsTests.swift; sourceTree = "<group>"; };
+		54275BE3BD9858FC14EBC2C9 /* Diagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Diagnostics.swift; sourceTree = "<group>"; };
+		7C32DA5551C18B52D61AAF1D /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -156,6 +163,7 @@
 			isa = PBXGroup;
 			children = (
 				F81C94718B0CE980E1D0EB48 /* AgentInbox.entitlements */,
+				7C32DA5551C18B52D61AAF1D /* DiagnosticsView.swift */,
 				5E65B2B600D9753A003026D2 /* AgentInboxApp.swift */,
 				5CB419B3017BED47065FE9CE /* Assets.xcassets */,
 				00D896AD161575560CDDB859 /* ImportTailnetDevicesIntent.swift */,
@@ -210,6 +218,7 @@
 		5E170EB35AA4EE4ED7178DEE /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				C8CCBAEEACAD0F609C6AEDEE /* DiagnosticsTests.swift */,
 				2F63AD85E7A477BC2F6C3A07 /* AutomaticPairingTests.swift */,
 				65AD82C49240C6CA540E9F95 /* LocalRelayTests.swift */,
 				90F5FF36EA359372D97B6FB5 /* PairingTests.swift */,
@@ -245,6 +254,7 @@
 			isa = PBXGroup;
 			children = (
 				EA02BD0D26268EE0F179AE64 /* API.swift */,
+				54275BE3BD9858FC14EBC2C9 /* Diagnostics.swift */,
 				E8D5D0628BFD48D6B390FA62 /* DecisionMessages.swift */,
 				A640D23BE257DF89829F281E /* InboxNetwork.swift */,
 				156C7132824A4F7F365FCED0 /* Models.swift */,
@@ -406,6 +416,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				35C5087BE0151EF7D5CF2287 /* API.swift in Sources */,
+				7F8DB6BCC849AB7C28B75636 /* Diagnostics.swift in Sources */,
 				01761210EF7545BC9F6D0BD7 /* DecisionMessages.swift in Sources */,
 				861C0CE0480E8C9A66E7C0B1 /* InboxNetwork.swift in Sources */,
 				3F1F63BDF10583CB65ECA253 /* InboxWidget.swift in Sources */,
@@ -422,8 +433,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				406712D2A9E42792395DF6FE /* API.swift in Sources */,
+				F049EB7D0D36ED8029CD2CB1 /* DiagnosticsView.swift in Sources */,
 				0DD9676FEA3EAAD4638661DC /* AgentInboxApp.swift in Sources */,
 				79F9A456E9154F70A206B8EB /* DecisionMessages.swift in Sources */,
+				05C15ABC98615E9E0B779A6B /* Diagnostics.swift in Sources */,
 				243E072933121ADE397BC774 /* ImportTailnetDevicesIntent.swift in Sources */,
 				23C7C0176F99563290D63D11 /* InboxNetwork.swift in Sources */,
 				53FFDCD905F47C4F63D1C951 /* Models.swift in Sources */,
@@ -449,6 +462,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9334CDF673A807CEBDA62270 /* DiagnosticsTests.swift in Sources */,
 				A30F62E7F7BC6FC591C5DC9B /* AutomaticPairingTests.swift in Sources */,
 				030EE0FBB405F4C0EB8A0621 /* LocalRelayTests.swift in Sources */,
 				8A1514E5472588895EB9A928 /* PairingTests.swift in Sources */,

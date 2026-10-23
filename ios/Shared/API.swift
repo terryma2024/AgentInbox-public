@@ -37,6 +37,7 @@ struct InboxAPI: DecisionTransport {
         guard (200...299).contains(http.statusCode) else {
             switch http.statusCode {
             case 401, 403: throw APIError.httpStatus(http.statusCode)
+            case 409 where path.hasPrefix("/v1/diagnostics/"): throw APIError.httpStatus(409)
             case 409: throw APIError.message("请求已变化或已被处理，请刷新")
             case 400: throw APIError.message("答案不符合当前请求")
             default: throw APIError.httpStatus(http.statusCode)

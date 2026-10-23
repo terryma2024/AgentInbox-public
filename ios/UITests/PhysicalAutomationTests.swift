@@ -26,6 +26,56 @@ final class PhysicalAutomationTests: XCTestCase {
         return false
     }
 
+    func testDiagnosticsAPNsAndNativeReplyOnPhysicalPhone() throws {
+        try requirePhysicalAuthorization()
+        let env = ProcessInfo.processInfo.environment
+        guard env["AGENTINBOX_PHYSICAL_DIAGNOSTICS"] == "1", let host = env["AGENTINBOX_PHYSICAL_DIAGNOSTIC_HOST"],
+              host.hasPrefix("diagnostic-qualification-"), let subject = env["AGENTINBOX_PHYSICAL_DIAGNOSTIC_SUBJECT"], Int(subject) != nil else {
+            throw XCTSkip("需要明确绑定的临时原生诊断 host；不操作正常任务")
+        }
+        let app = XCUIApplication(); app.launch()
+        if app.alerts.buttons["稍后"].waitForExistence(timeout: 2) { app.alerts.buttons["稍后"].tap() }
+        _ = allowOnlyAgentInboxNotificationAlert()
+        app.tabBars.buttons["设置"].tap()
+        func reveal(_ item: XCUIElement, downward: Bool = false) {
+            for _ in 0..<16 where !item.isHittable { if downward { app.swipeDown() } else { app.swipeUp() } }
+            XCTAssertTrue(item.isHittable)
+        }
+        let entry = app.buttons["open-diagnostics"]; reveal(entry); entry.tap()
+        XCTAssertTrue(app.buttons["diagnostics-run"].waitForExistence(timeout: 10)); app.buttons["diagnostics-run"].tap()
+        let relay = app.staticTexts["diagnostic-state.0.relay"]
+        XCTAssertTrue(relay.waitForExistence(timeout: 20)); XCTAssertEqual(relay.label, "通过")
+        XCTAssertEqual(app.staticTexts["diagnostic-state.0.sync"].label, "通过")
+        let push = app.buttons["diagnostic-host.\(host).push"]; reveal(push); push.tap()
+        let pushState = app.staticTexts["diagnostic-state.\(subject).push"]
+        for _ in 0..<12 where !pushState.exists { app.swipeUp(); RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }
+        XCTAssertTrue(pushState.waitForExistence(timeout: 15)); reveal(pushState)
+        let passed = NSPredicate(format: "label == %@", "通过")
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: passed, object: pushState)], timeout: 60), .completed, "必须由真实 APNs 系统通知观察确认手机到达")
+        let received = app.staticTexts["diagnostic-state.\(subject).received"]
+        reveal(received)
+        XCTAssertNotEqual(received.label, "通过", "推送到达不得点亮原调用接收")
+        let pushShot = XCTAttachment(screenshot: app.screenshot()); pushShot.name = "physical-diagnostic-apns-without-reply"; pushShot.lifetime = .keepAlways; add(pushShot)
+        print("AGENTINBOX_PHYSICAL_DIAGNOSTIC_APNS_OBSERVED")
+        let reply = app.buttons["diagnostic-host.\(host).reply"]; reveal(reply, downward: true); reply.tap()
+        let answer = app.buttons["diagnostic-answer.q0-o0"]
+        for _ in 0..<18 where !answer.exists { app.swipeUp(); RunLoop.current.run(until: Date().addingTimeInterval(1)) }
+        XCTAssertTrue(answer.waitForExistence(timeout: 20)); reveal(answer)
+        reveal(received, downward: true)
+        XCTAssertNotEqual(received.label, "通过")
+        reveal(answer); answer.tap()
+        reveal(received, downward: true)
+        let continued = app.staticTexts["diagnostic-state.\(subject).continued"]
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: passed, object: received)], timeout: 35), .completed)
+        reveal(continued)
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: passed, object: continued)], timeout: 35), .completed)
+        let share = app.buttons["diagnostics-share"]; reveal(share); XCTAssertTrue(share.exists)
+        let completed = XCTAttachment(screenshot: app.screenshot()); completed.name = "physical-diagnostic-native-received-continued"; completed.lifetime = .keepAlways; add(completed)
+        let proof: [String: Any] = ["physicalPhone": true, "apnsSystemObservation": true, "pushDoesNotConfirmReception": true, "nativeReceivedVisible": true, "nativeContinuedVisible": true, "shareEntryVisible": true, "requiresIndependentNativeVerification": true]
+        let item = XCTAttachment(data: try JSONSerialization.data(withJSONObject: proof), uniformTypeIdentifier: "public.json"); item.name = "physical-diagnostic-ui-proof"; item.lifetime = .keepAlways; add(item)
+        print("AGENTINBOX_PHYSICAL_DIAGNOSTICS_ACCEPTED")
+    }
+
     func testWidgetExperienceOnPhysicalPhone() throws {
         try requirePhysicalAuthorization()
         let env = ProcessInfo.processInfo.environment

@@ -31,12 +31,16 @@ final class NotificationDelegate: NSObject, UIApplicationDelegate, UNUserNotific
         InboxConfiguration.defaults.set("注册失败：\(error.localizedDescription)", forKey: "pushStatus")
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        await MainActor.run { DiagnosticNotificationObservation.record(response.notification) }
+        if let url = DiagnosticRoute.notificationURL(response.notification.request.content.userInfo) {
+            await MainActor.run { UIApplication.shared.open(url) }; return
+        }
         if let id = response.notification.request.content.userInfo["requestId"] as? String,
            let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed), let url = URL(string: "agentinbox://request/\(encoded)") {
             await MainActor.run { UIApplication.shared.open(url) }
         }
     }
-    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .sound, .list] }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { await MainActor.run { DiagnosticNotificationObservation.record(notification) }; return [.banner, .sound, .list] }
 }
 
 @MainActor
@@ -48,6 +52,7 @@ final class InboxStore: ObservableObject {
     @Published var pairingStatus: String?
     private var consumedPairingFile = false
     private var connectionGeneration = 0
+    @Published var diagnosticRoute: DiagnosticRoute?
     @Published var openedRequestID: String?
     @Published var lastRefresh: Date = InboxCache.load().refreshedAt
     let isDemo = ProcessInfo.processInfo.arguments.contains("--demo")
@@ -144,6 +149,7 @@ final class InboxStore: ObservableObject {
     }
     func relayDidChange() {
         connectionGeneration += 1
+        diagnosticRoute = nil
         requests = []; hosts = []; openedRequestID = nil; error = nil; busy = false; lastRefresh = .distantPast
         InboxCache.save(.init(requests: [], refreshedAt: .distantPast, error: nil))
         InboxConfiguration.widgetRequestID = nil
@@ -151,6 +157,7 @@ final class InboxStore: ObservableObject {
         if InboxConfiguration.notificationsEnabled { UIApplication.shared.registerForRemoteNotifications() }
     }
     func open(_ url: URL) {
+        if let route = DiagnosticRoute(url: url) { diagnosticRoute = route; return }
         guard let id = RequestRoute.requestID(from: url) else { return }
         openedRequestID = id
         Task { await refresh() }
@@ -197,6 +204,7 @@ struct InboxRootView: View {
             NavigationStack { SettingsView() }.tabItem { Label("设置", systemImage: "gearshape") }.tag(3)
         }
         .tint(InboxPalette.accent)
+        .sheet(item: $store.diagnosticRoute) { route in NavigationStack { DiagnosticsView(initialTestID: route.id).toolbar { Button("完成") { store.diagnosticRoute = nil } } }.environmentObject(store) }
         .alert(vpnGuidance.launchError == nil ? "尚未接入 Tailscale 网络" : "无法打开 App Store", isPresented: $vpnGuidance.showPrompt) {
             if vpnGuidance.launchError == nil {
                 Button("前往 App Store") { Task { await vpnGuidance.openTailscaleStore() } }
@@ -589,6 +597,7 @@ struct SettingsView: View {
                 Text(DeviceSecret.read() == nil ? "尚未配对" : "设备密钥已存入 Keychain").font(.footnote).foregroundStyle(.secondary)
                 Text("在中转服务生成一个短期、单次使用的配对码。设备密钥会自动保存在本机，不需要粘贴私钥。").font(.footnote).foregroundStyle(.secondary)
             }
+            Section("排障") { NavigationLink { DiagnosticsView() } label: { Label("自检与诊断", systemImage: "checkmark.shield") }.accessibilityIdentifier("open-diagnostics") }
             Section("主动提醒") {
                 Button("启用推送通知") { Task { await store.enableNotifications() } }
                 Text(InboxConfiguration.defaults.string(forKey: "pushStatus") ?? "尚未验证真实 APNs 推送").font(.footnote).foregroundStyle(.secondary)
