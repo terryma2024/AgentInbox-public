@@ -187,7 +187,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             } else {
                 json!({})
             };
-            route(&store, cred, req.method().as_str(), &url, body, now())
+            let mut result = route(&store, cred, req.method().as_str(), &url, body, now())?;
+            if path == "/v1/diagnostics" {
+                result["pushProviderConfigured"] = json!(config.apns.is_some());
+            }
+            Ok(result)
         })();
         let (status, payload) = match result {
             Ok(v) => (200, v),
@@ -227,16 +231,30 @@ fn route(
             )
         }
         ("GET", "/v1/capabilities") => {
-            Ok(json!({"replyProgressVersion":1,"bindingDigestVersion":1}))
+            Ok(json!({"replyProgressVersion":1,"bindingDigestVersion":1,"diagnosticsVersion":1}))
         }
         ("GET", "/v1/host/reply-progress") => Ok(json!({"requests":s.incomplete_progress(host)?})),
         ("GET", "/v1/hosts") => s.hosts(time),
+        ("GET", "/v1/diagnostics") if c.role == "device" => {
+            let mut snapshot = s.diagnostic_snapshot(&c.id, time)?;
+            // Provider configuration is added by the authenticated server, never supplied by a device.
+            snapshot["relayReachable"] = json!(true);
+            Ok(snapshot)
+        }
+        ("POST", "/v1/diagnostics/tests") if c.role == "device" => {
+            s.start_diagnostic(&c.id, &body, time)
+        }
+        ("GET", "/v1/host/diagnostics/next") => s.claim_diagnostic(host, time),
+        ("POST", "/v1/host/diagnostics/result") => s.update_diagnostic(host, &body, time),
         ("GET", "/v1/host/requests") => Ok(json!({"requests":s.active_for_host(host,time)?})),
         ("GET", "/v1/host/upgrade-status") => s.upgrade_status(host, time),
         ("POST", "/v1/host/requests") => s.create(host, body, time),
         ("POST", "/v1/host/heartbeat") => {
             if body.get("hostId").is_some_and(|id| id != host) {
                 return Err(error(403, "host binding mismatch"));
+            }
+            if let Some(observation) = body.get("diagnostics") {
+                s.diagnostic_heartbeat(host, observation, time)?;
             }
             s.heartbeat(host, time)
         }
@@ -304,6 +322,12 @@ fn route(
             Ok(json!({"revoked":true}))
         }
         _ => {
+            if let Some(id) = path.strip_prefix("/v1/diagnostics/tests/") {
+                if method == "GET" && c.role == "device" {
+                    return s.diagnostic_test(&c.id, id, time);
+                }
+                return Err(error(403, "device diagnostic operation required"));
+            }
             if let Some(rest) = path.strip_prefix("/v1/requests/") {
                 if let Some(id) = rest.strip_suffix("/responses") {
                     if method != "POST" || c.role != "device" {
@@ -315,6 +339,9 @@ fn route(
                     return s.respond(&c.id, body, time);
                 }
                 if method == "GET" {
+                    if c.role == "device" {
+                        s.authorize_diagnostic_request(rest, &c.id)?;
+                    }
                     let q = s.get(rest, c.role == "host")?;
                     if c.role == "host" && q["hostId"] != host {
                         return Err(error(403, "host binding mismatch"));

@@ -61,3 +61,13 @@ pub(crate) fn get_json_bounded(
 ) -> Result<Value, String> {
     call(base, token, path, None, timeout)
 }
+
+pub(crate) fn post_json_bounded(
+    base: &str,
+    token: &str,
+    path: &str,
+    body: &Value,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
+    call(base, token, path, Some(body), timeout)
+}

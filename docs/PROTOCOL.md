@@ -103,3 +103,18 @@ relay 以事务累积、幂等合并。同 proofId 不同内容拒绝，较低�
 ## 本机设备管理
 
 `agentinbox device-admin DATABASE list|revoke DEVICE_ID` 使用 relay 数据库 owner 的既有 OS 权限，未新增 HTTP 管理接口。list 仅返回设备元数据；revoke 与设备自撤销共享单一 IMMEDIATE 事务，未知 ID 拒绝、重复撤销幂等，提交后后续认证拒绝并取消 pending push。该操作不改答案状态，不重新领取或派发原请求。发送前 worker 重查与在途推送限制、实际命令见 [DEVICE-ADMIN.md](DEVICE-ADMIN.md)。
+# 诊断协议扩展
+
+能力查询新增 `diagnosticsVersion: 1`。以下操作仍使用现有 Bearer 配对与 host 绑定：
+
+| 操作 | 角色 | 语义 |
+| --- | --- | --- |
+| `GET /v1/diagnostics` | device | 新鲜中转快照、host 观测、此设备推送注册与最近测试 ID |
+| `POST /v1/diagnostics/tests` | device | `testId`／`hostId`／`mode`（`push` 或 `reply`）；同 ID 幂等、有效期 180 秒 |
+| `GET /v1/diagnostics/tests/{testId}` | 创建它的 device | 只读测试状态、测试请求、APNs 阶段及回执投影 |
+| `GET /v1/host/diagnostics/next` | 对应 host | 原子领取一个未过期原生测试；至多领取一次 |
+| `POST /v1/host/diagnostics/result` | 对应 host | 仅接受 `unsupported`／`failed` 与固定原因码，不能报告接收成功 |
+
+心跳可选 `diagnostics` 仅接受固定适配器状态、成功扫描／hook 观测时间和对账／排空／来源证明能力布尔值。未知观测与旧 host 不推断为通过。诊断请求的 `diagnosticTestId` 参与绑定摘要；它只对创建测试的 device 可读／可答，推送和通知点击带对应诊断路由，不进入普通待办。
+
+测试的 submitted／received／continued 取自既有 `replyProgress`，不取自作业更新或推送。设备还独立核对本地答案 ID 与绑定摘要。接口返回的操作身份仅用于 App 内定位；分享另用白名单模型，详见 [脱敏诊断](SELF-CHECK-DIAGNOSTICS.md)。

@@ -38,6 +38,9 @@ pub fn binding_digest(q: &Value) -> String {
             fields.insert(key.into(), q[key].clone());
         }
     }
+    if let Some(test) = q.get("diagnosticTestId") {
+        fields.insert("diagnosticTestId".into(), test.clone());
+    }
     // serde_json without preserve_order uses recursively sorted map keys.
     format!(
         "{:x}",
