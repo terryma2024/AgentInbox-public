@@ -177,8 +177,8 @@ struct DiagnosticsView: View {
                     ForEach(Array(snapshot.hosts.enumerated()), id: \.element.id) { index, host in
                         Section("主机 \(index + 1) · \(host.hostId)") {
                             ForEach(controller.currentStages.filter { $0.subject == index + 1 }) { checkRow($0) }
-                            Button("测试推送") { Task { await controller.start(host: host.hostId, mode: "push") } }.disabled(controller.busy || controller.sending)
-                            Button("测试原调用回复闭环") { Task { await controller.start(host: host.hostId, mode: "reply") } }.disabled(controller.busy || controller.sending)
+                            Button("测试推送") { Task { await controller.start(host: host.hostId, mode: "push") } }.accessibilityIdentifier("diagnostic-host.\(host.hostId).push").disabled(controller.busy || controller.sending)
+                            Button("测试原调用回复闭环") { Task { await controller.start(host: host.hostId, mode: "reply") } }.accessibilityIdentifier("diagnostic-host.\(host.hostId).reply").disabled(controller.busy || controller.sending)
                         }
                     }
                     Section("通知配置") {
