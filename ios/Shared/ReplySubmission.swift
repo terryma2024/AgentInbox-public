@@ -17,10 +17,11 @@ enum ReplyDraft {
     }
 }
 enum ReplySubmission {
-    static func send(_ answer: DecisionResponse, using transport: any DecisionTransport) async throws -> ResponseReceipt {
+    static func send(_ answer: DecisionResponse, using transport: any DecisionTransport, validateLatest: (DecisionRequest) throws -> Void = { _ in }) async throws -> ResponseReceipt {
         let context = ReplyJournalContext.current
         let latest = try await transport.request(answer.requestId)
         guard context == ReplyJournalContext.current else { throw APIError.message("连接或配对已变化，请刷新原请求") }
+        try validateLatest(latest)
         if latest.bindingDigest != nil {
             let capability = try await transport.replyCapabilities()
             guard capability?.replyProgressVersion == 1, capability?.bindingDigestVersion == 1 else { throw APIError.message("中继分步回执能力未确认，请刷新后重试") }
@@ -48,7 +49,10 @@ enum WidgetReplySubmission {
         } else {
             answer = DecisionResponse(responseId: responseID, requestId: cached.id, revision: cached.revision, optionIds: [optionID], text: nil, answers: [:], bindingDigest: cached.bindingDigest)
         }
-        return try await ReplySubmission.send(answer, using: transport)
+        return try await ReplySubmission.send(answer, using: transport) { latest in
+            guard !cached.widgetFingerprint.isEmpty, latest.widgetFingerprint == cached.widgetFingerprint,
+                  latest.canAnswerInWidget else { throw APIError.message("请求内容已变化，请刷新并查看原题") }
+        }
     }
 }
 

@@ -37,7 +37,7 @@ xcodebuild -project ios/AgentInbox.xcodeproj -scheme AgentInbox \
 1. 设置服务地址。模拟器本地默认 `http://127.0.0.1:8787`；真 iPhone 的 loopback 是手机自身。真机需要批准并配置 Tailscale 私网服务监听或 HTTPS。
 2. 在中转服务生成 10 分钟有效、单次使用的配对码；设置输入地址和码，选择“配对此 iPhone”。设备密钥自动写 Keychain，不需要在聊天粘贴私钥。
 3. 待决列表展示机器、项目目录名、短会话 ID；详情显示完整项目路径与显式会话名或短 ID。`launchSurface=unknown` 明确显示“原生请求；终端来源未确认”，不从 pane、focus 或易变来源 metadata 猜测 tmux/Herdr/Desktop。
-4. 添加“Agent 待决”主屏幕 Widget。完整可读的简短单选直接通过 AppIntent 回答；文字、多选、长题、多题或缺少真实操作摘要的审批打开 `agentinbox://request/{requestId}` 准确页。
+4. 添加“Agent 待决”主屏幕 Widget。完整可读且适合当前尺寸的简短单选直接通过 AppIntent 回答；文字、多选、长题、多题或缺少真实操作摘要的审批打开 `agentinbox://request/{requestId}` 准确页。自动切题后先点右上角“回答此题”再选答案；待办数、等待时长、最近同步和发送状态的行为及最新验收范围见 [主屏体验](WIDGET-INBOX-EXPERIENCE.md)。
 5. 多请求时，详情可“显示在小组件”，只显示所选 requestId，失效或已采用不会退回另一个待决题。设置“显示最新待决请求”可取消固定。
 6. 历史显示原任务采用、已在本机处理、过期、失效与结果未知；机器页显示主机在线状态。
 7. 用户点“启用推送通知”才请求系统通知权限并注册 APNs。Debug 使用 sandbox，Release 使用 production；注册成功不等于送达验收。

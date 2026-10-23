@@ -594,7 +594,7 @@ struct SettingsView: View {
                 Text(InboxConfiguration.defaults.string(forKey: "pushStatus") ?? "尚未验证真实 APNs 推送").font(.footnote).foregroundStyle(.secondary)
                 Text(InboxConfiguration.defaults.string(forKey: "widgetPushStatus") ?? "Widget 专用推送尚未注册").font(.footnote).foregroundStyle(.secondary)
             }
-            Section("主屏幕小组件") { Button("显示最新待决请求") { InboxConfiguration.widgetRequestID = nil; WidgetCenter.shared.reloadAllTimelines(); message = "小组件将显示最新待决请求" }; Text("长按主屏幕添加“Agent 待决”。简短单选可直接回答；文字和多选会打开准确请求页。小组件刷新有系统延迟，推送和收件箱独立可用。").font(.footnote).foregroundStyle(.secondary) }
+            Section("主屏幕小组件") { Button("显示最新待决请求") { InboxConfiguration.widgetRequestID = nil; WidgetCenter.shared.reloadAllTimelines(); message = "小组件将显示最新待决请求" }; Text("长按主屏幕添加“Agent 待决”。完整可读的简短单选可直接回答；文字和复杂问题打开准确请求页。自动切题后先点右上角“回答此题”，再选答案，避免连点误答。组件显示待办数、等待时长、最近同步与发送状态；刷新仍可能有系统延迟。").font(.footnote).foregroundStyle(.secondary) }
             Section("设备安全") { Button("移除此设备密钥", role: .destructive) { do { try DeviceSecret.save(""); InboxConfiguration.defaults.removeObject(forKey: "deviceId"); message = "本机密钥已移除；服务器端撤销仍需执行。" } catch { message = "本机密钥未移除" } } }
             if let status = store.pairingStatus { Section { Text(status).font(.footnote).accessibilityIdentifier("pairing-status") } }
             if let message { Section { Text(message).font(.footnote) } }

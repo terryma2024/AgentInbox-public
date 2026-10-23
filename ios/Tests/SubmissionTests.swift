@@ -76,6 +76,21 @@ final class SubmissionTests: XCTestCase {
         json["kind"] = "choice"; json["questions"] = [["id":"q1","prompt":"第一题","options":[],"allowText":true,"multiSelect":false],["id":"q2","prompt":"第二题","options":[],"allowText":true,"multiSelect":false]]
         request = try JSONDecoder().decode(DecisionRequest.self, from: JSONSerialization.data(withJSONObject: json)); XCTAssertFalse(request.canAnswerInWidget)
     }
+    func testWidgetRejectsChangedContentEvenWithSameIDRevisionAndOptionIDs() async throws {
+        let cached = try fixture()
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(cached)) as? [String: Any])
+        json["body"] = "这是另一项操作，不能沿用旧组件的点击。"
+        json["options"] = [["id": "test", "label": "批准另一项操作"]]
+        let changed = try JSONDecoder().decode(DecisionRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        let transport = TestDecisionTransport(changed)
+        do {
+            _ = try await WidgetReplySubmission.send(cached: cached, optionID: "test", responseID: "fixture-stale-widget", using: transport)
+            XCTFail("旧组件内容不能回答同版本的新内容")
+        } catch {}
+        let calls = await transport.posted
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertNil(ResponseJournal.pending(for: changed))
+    }
 }
 
 
