@@ -22,7 +22,7 @@
 
 按后续要求，Tailscale 设备行已改为只显示域名与 IPv4／IPv6，其他机器信息留在详情。签名新版已实际覆盖安装；既有导入／API 存储回归 16 项通过，真机逐台核对 6 行的域名和全部 IP 通过，夜间截图已目检。证据为忽略目录 `evidence/tailscale-api/address-only-physical.log` 和 `address-only-screenshots/`。长地址允许换行，缺失字段显示未提供。
 
-设备详情现已显示 Tailscale 域名，并加入“设置为中继服务器”。点击后沿用当前协议／端口，通过所选域名验证中继 API 与现有应用配对，成功才保存；失败保留原地址。该验证独立于 8788 主机发现，切换时隔离 App／Widget 的旧缓存、迟到请求和旧组件操作。完整单元 111 通过／6 条件跳过，核心 UI 7 通过；签名正式源码构建已覆盖安装。真机成功／失败路径通过：不可达候选没有改动地址，当前 `relay-host` 域名认证成功且配对保留；深色截图已目检。真实跨独立中继迁移未验收，配置变更提交由单元测试覆盖。证据见忽略目录 `evidence/tailscale-api/relay-selection-physical-v2.log`、`relay-selection-full-unit-v2.log`、`relay-selection-ui-regression-v2.log` 及 `relay-selection-screenshots/`。
+设备详情现已显示 Tailscale 域名，并加入“设置为中继服务器”。点击后沿用当前协议／端口，通过所选域名验证中继 API 与现有应用配对，成功才保存；失败保留原地址。该验证独立于 8788 主机发现，切换时隔离 App／Widget 的旧缓存、迟到请求和旧组件操作。完整单元 111 通过／6 条件跳过，核心 UI 7 通过；签名正式源码构建已覆盖安装。真机成功／失败路径通过：不可达候选没有改动地址，当前 已保存中继 域名认证成功且配对保留；深色截图已目检。真实跨独立中继迁移未验收，配置变更提交由单元测试覆盖。证据见忽略目录 `evidence/tailscale-api/relay-selection-physical-v2.log`、`relay-selection-full-unit-v2.log`、`relay-selection-ui-regression-v2.log` 及 `relay-selection-screenshots/`。
 
 新增启动／返回前台的 VPN 引导：未检测到本机 Tailscale 隧道时提示打开独立 iPhone App，早期确认后以裸深链接唤起，后发现会触发签名错误；当前修正为明确前往 Tailscale 的 iOS App Store 页面，由用户打开／安装。只读接口检测、不自动修改 VPN；共享 IPv4 网段单独匹配视为未知，避免误判其他 VPN。原始缺失功能及 IPv4 误判回归先 RED 后 GREEN，完整单元 118 通过／6 条件跳过；核心 UI 7 通过，签名构建、strict codesign 与最终覆盖安装通过。复审无剩余 P1／P2；用户手动断开后的提示及 Tailscale 进入前台曾通过，深色提示截图已目检；该测试遗漏 Tailscale 内部签名错误页，不能计为完整成功。未删除 Tailscale，未将 App Store 回退单元测试计为真实卸载验收。最初两次检查误用了旧测试工程 App，修正 xctestrun 的目标及依赖路径为正式构建后通过，失败日志保留。证据在忽略目录 `evidence/tailscale-api/vpn-guidance-disconnected-physical-v3.log`、`vpn-guidance-physical-proof.json` 与 `vpn-guidance-screenshots/`。
 
